@@ -70,6 +70,11 @@ def milestone_kind(task: dict[str, Any]) -> str | None:
     return value if value in MILESTONES else None
 
 
+def invalid_milestone(task: dict[str, Any]) -> bool:
+    value = str(task.get("roll_fixed") or "").strip()
+    return bool(value) and milestone_kind(task) is None
+
+
 def task_command() -> str:
     return os.environ.get("TASKWARRIOR_ROLL_TASK") or shutil.which("task") or "task"
 
@@ -168,6 +173,11 @@ def calculate_schedule(
             memo[memo_key] = base_date_for(task)
             return memo[memo_key]
 
+        if invalid_milestone(task):
+            warnings.append(f"Roll {uuid[:8]}: invalid roll_fixed value.")
+            memo[memo_key] = None
+            return None
+
         offset = parse_duration(task.get("roll_offset"))
         if offset is None:
             warnings.append(f"Roll {uuid[:8]}: invalid/missing offset.")
@@ -258,6 +268,8 @@ def main() -> int:
         changed_slack_values = 0
 
         for uuid, task in by_uuid.items():
+            if invalid_milestone(task):
+                continue
             modifications: list[str] = []
             due_changed = slack_changed = False
             if uuid in calculated and parse_task_date(task.get("due")) != calculated[uuid]:

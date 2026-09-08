@@ -64,6 +64,21 @@ class RollTests(unittest.TestCase):
         self.assertTrue(any("predecessor missing" in warning for warning in warnings))
         self.assertTrue(any("invalid/missing offset" in warning for warning in warnings))
 
+    def test_invalid_fixed_value_warns_without_changes(self):
+        tasks = [
+            {"uuid": "A", "status": "pending", "due": "20260101T000000Z"},
+            {
+                "uuid": "B",
+                "status": "pending",
+                "due": "20260110T000000Z",
+                "roll": "A",
+                "roll_offset": "2d",
+                "roll_fixed": "finsh-line",
+            },
+        ]
+        due, slack, warnings = roll.calculate_schedule(tasks)
+        self.assertEqual((due, slack), ({}, {}))
+        self.assertTrue(any("invalid roll_fixed" in warning for warning in warnings))
 
 if __name__ == "__main__":
     unittest.main()

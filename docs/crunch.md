@@ -12,6 +12,8 @@ Convert `duration` to hours and treat `progress` as a percentage from 0 through
 remaining = duration * (1 - progress / 100)
 ```
 
+When remaining work is zero, Crunch is unset and scoring stops.
+
 The score is the sum of three parts:
 
 1. Start bonus: `max(0, 1.5 * (1 - progress / 25))`.

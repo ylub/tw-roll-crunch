@@ -55,6 +55,10 @@ The older values `yes`, `true`, `on`, and `fixed` remain accepted as aliases
 for the same finish-line behavior. New configuration should use `checkpoint`
 or `finish-line`, because those values state the intent.
 
+Any other nonempty value is rejected with a warning, and Roll leaves that task
+unchanged. This prevents a typo from turning a fixed milestone into a rolling
+due date.
+
 ### `roll_slack`
 
 On a fixed task, records the hours between its fixed due date and the fully
