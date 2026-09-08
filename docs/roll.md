@@ -1,0 +1,120 @@
+# Roll
+
+Roll keeps the due dates of dependent tasks aligned with the work before them.
+It runs as a Taskwarrior `on-exit` hook and uses only Python's standard library.
+
+## Model
+
+Each pending or waiting rolling task identifies one predecessor by UUID in
+`roll`. Roll chooses a base date from that predecessor:
+
+- completed predecessor: its `end` timestamp
+- pending or waiting predecessor: its `due` timestamp
+
+The task's `roll_offset` is applied to that base date. This makes the ordinary
+relationship:
+
+```text
+task due = predecessor base + roll_offset
+```
+
+For example:
+
+```text
+A --2d--> B --4d--> C (checkpoint) --> D --> E (finish-line milestone)
+```
+
+Here B follows A by two days, and C follows B by four days. C can hold an
+intermediate checkpoint; E can hold the chain's fixed finish-line milestone.
+
+## Fields
+
+### `roll`
+
+Stores the UUID of this task's predecessor. An absent value leaves the task
+outside the rolling chain.
+
+```sh
+task TASK_ID modify roll:PREDECESSOR_UUID
+```
+
+### `roll_offset`
+
+Sets the Taskwarrior duration between a predecessor's base date and this
+task's due date. Use ordinary Taskwarrior duration values such as `2d`, `4d`,
+or `1w`.
+
+### `roll_fixed`
+
+Marks a due date as fixed instead of freely rolling it.
+
+- `checkpoint` keeps an intermediate due date fixed while the chain continues.
+- `finish-line` stores a fixed finish-line milestone for the chain.
+
+The older values `yes`, `true`, `on`, and `fixed` remain accepted as aliases
+for the same finish-line behavior. New configuration should use `checkpoint`
+or `finish-line`, because those values state the intent.
+
+### `roll_slack`
+
+On a fixed task, records the hours between its fixed due date and the fully
+projected arrival. The projection follows the whole chain and treats earlier
+fixed milestones as ordinary rolling tasks instead of schedule resets.
+
+Positive slack means the projected chain arrives early; zero means it reaches
+the fixed date; negative slack means it arrives late.
+
+Treat `roll_slack` as Roll output. Do not use it as a substitute for
+`roll_offset`.
+
+## Fixed dates
+
+A checkpoint is an intermediate boundary. Roll does not overwrite the
+checkpoint's due date. A downstream task uses that fixed due date as its
+ordinary predecessor base.
+
+A finish-line (`roll_fixed:finish-line`) is the fixed milestone at the end of a
+chain. Roll keeps that due date stable and uses `roll_slack` to expose whether
+the fully projected chain arrives early or late. The literal Taskwarrior value
+is:
+
+```text
+roll_fixed:finish-line
+```
+
+## Errors and cycles
+
+Roll refuses to guess when a schedule cannot be calculated safely. Typical
+errors include a predecessor UUID that does not resolve, a predecessor without
+the required `due` or `end` timestamp, an unusable predecessor status, a fixed
+task without a due date, and an invalid or missing `roll_offset`.
+
+Dependency cycles have no valid first task. Roll detects a cycle, reports the
+affected tasks, and leaves their dates unchanged. Fix the dependency graph and
+run Taskwarrior again.
+
+## Capacity lookup
+
+Project capacity keys use longest dotted-prefix lookup. Given a project such
+as `alpha.beta.gamma`, Roll checks, in order:
+
+```text
+roll.capacity.alpha.beta.gamma
+roll.capacity.alpha.beta
+roll.capacity.alpha
+```
+
+The first configured value wins. If no project prefix is configured, no
+capacity applies. Capacity lookup is preserved and available, but is currently
+informational: it does not alter due dates, `roll_slack`, or Crunch results.
+
+## Example
+
+```sh
+task TASK_ID modify roll:PREDECESSOR_UUID roll_offset:2d
+task CHECKPOINT_ID modify roll:PREDECESSOR_UUID roll_offset:4d roll_fixed:checkpoint
+task FINISH_ID modify roll:PREDECESSOR_UUID roll_offset:2d roll_fixed:finish-line
+```
+
+After changing a predecessor's due date or completing it, run any Taskwarrior
+command normally. The `on-exit` hook recalculates affected rolling tasks.

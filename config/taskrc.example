@@ -1,0 +1,26 @@
+# Portable UDA definitions for taskwarrior-roll-crunch.
+uda.duration.type=duration
+uda.duration.label=Duration
+
+uda.progress.type=numeric
+uda.progress.label=Progress
+
+uda.crunch.type=string
+uda.crunch.label=Crunch
+uda.crunch.values=LOW,MED,HIGH,CRITICAL
+
+uda.roll.type=string
+uda.roll.label=Roll
+
+uda.roll_offset.type=duration
+uda.roll_offset.label=Roll Offset
+
+uda.roll_fixed.type=string
+uda.roll_fixed.label=Finish-line Milestone
+
+uda.roll_slack.type=numeric
+uda.roll_slack.label=Roll Slack Hours
+
+# Optional generic capacity examples:
+# roll.capacity.client=20
+# roll.capacity.client.special=5
