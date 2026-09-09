@@ -114,9 +114,10 @@ fixed finish-line milestone. A chain can be pictured as:
 A --2d--> B --4d--> C (checkpoint) --> D --> E (finish-line milestone)
 ```
 
-Roll uses a completed predecessor's `end` time; otherwise it uses the
-predecessor's `due` time. See [docs/roll.md](docs/roll.md) for field semantics,
-fixed dates, errors, and cycle handling.
+Roll uses a predecessor's `due` time while it is active. On completion, it
+applies `end + roll_offset` once and releases the ordinary child from the Roll
+link. See [docs/roll.md](docs/roll.md) for field semantics, fixed dates, errors,
+and cycle handling.
 
 ## Tests
 

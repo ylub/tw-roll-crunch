@@ -18,6 +18,12 @@ relationship:
 task due = predecessor base + roll_offset
 ```
 
+When an ordinary task's predecessor completes, Roll applies that calculation
+one final time and removes the child's `roll` and `roll_offset`. The child is
+then independent, so later due-date edits remain in place. Existing links to
+already-completed predecessors are released without changing the current due
+date. Fixed milestones keep their links for slack calculation.
+
 For example:
 
 ```text

@@ -1,5 +1,8 @@
 import datetime as dt
+import io
+import json
 import unittest
+from unittest.mock import patch
 
 from hooks import roll
 
@@ -31,6 +34,50 @@ class RollTests(unittest.TestCase):
         ]
         due, _, _ = roll.calculate_schedule(tasks)
         self.assertEqual(due["B"], dt.datetime(2026, 1, 3, tzinfo=UTC))
+
+    def test_completed_predecessor_releases_child(self):
+        tasks = [
+            {
+                "uuid": "A",
+                "status": "completed",
+                "end": "20260102T120000Z",
+                "modified": "20260102T120000Z",
+            },
+            {
+                "uuid": "B",
+                "status": "pending",
+                "due": "20260110T000000Z",
+                "roll": "A",
+                "roll_offset": "PT12H",
+            },
+        ]
+        cases = [
+            (
+                {"uuid": "A", "status": "completed"},
+                ["due:20260103T000000Z", "roll:", "roll_offset:"],
+            ),
+            ({"uuid": "B", "status": "pending"}, ["roll:", "roll_offset:"]),
+            ({"uuid": "X", "status": "pending"}, ["roll:", "roll_offset:"]),
+        ]
+        for changed, expected in cases:
+            with self.subTest(changed=changed["uuid"]), patch(
+                "sys.stdin", io.StringIO(json.dumps(changed))
+            ), patch.object(roll, "task_command", return_value="task"), patch.object(
+                roll, "export_tasks", return_value=tasks
+            ), patch.object(
+                roll, "apply_modifications"
+            ) as modify:
+                self.assertEqual(roll.main(), 0)
+                modify.assert_called_once_with("task", "B", expected)
+
+        tasks[0]["modified"] = "20260104T120000Z"
+        with patch("sys.stdin", io.StringIO(json.dumps(tasks[0]))), patch.object(
+            roll, "task_command", return_value="task"
+        ), patch.object(roll, "export_tasks", return_value=tasks), patch.object(
+            roll, "apply_modifications"
+        ) as modify:
+            self.assertEqual(roll.main(), 0)
+            modify.assert_called_once_with("task", "B", ["roll:", "roll_offset:"])
 
     def test_zero_and_negative_slack(self):
         base = {"uuid": "A", "status": "pending", "due": "20260101T000000Z"}

@@ -257,24 +257,53 @@ def apply_modifications(command: str, uuid: str, modifications: list[str]) -> No
 
 
 def main() -> int:
-    if not sys.stdin.read().strip():
+    input_data = sys.stdin.read()
+    if not input_data.strip():
         return 0
     command = task_command()
     try:
+        changed_uuids = {
+            str(task["uuid"])
+            for line in input_data.splitlines()
+            if line.strip()
+            and isinstance((task := json.loads(line)), dict)
+            and task.get("uuid")
+        }
         tasks = export_tasks(command)
         calculated, slack_hours, warnings = calculate_schedule(tasks)
         by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
         changed_due_dates = 0
         changed_slack_values = 0
+        released_links = 0
 
         for uuid, task in by_uuid.items():
             if invalid_milestone(task):
                 continue
             modifications: list[str] = []
-            due_changed = slack_changed = False
-            if uuid in calculated and parse_task_date(task.get("due")) != calculated[uuid]:
+            due_changed = slack_changed = link_released = False
+            predecessor_uuid = str(task.get("roll") or "")
+            predecessor = by_uuid.get(predecessor_uuid)
+            release = (
+                uuid in calculated
+                and predecessor is not None
+                and predecessor.get("status") == "completed"
+            )
+            finalize = (
+                release
+                and predecessor_uuid in changed_uuids
+                and predecessor.get("end") == predecessor.get("modified")
+                and uuid not in changed_uuids
+            )
+            if (
+                uuid in calculated
+                and (not release or finalize)
+                and parse_task_date(task.get("due")) != calculated[uuid]
+            ):
                 modifications.append(f"due:{format_task_date(calculated[uuid])}")
                 due_changed = True
+            if release:
+                modifications.extend(("roll:", "roll_offset:"))
+                link_released = True
             if uuid in slack_hours:
                 try:
                     old_slack = float(task.get("roll_slack"))
@@ -292,6 +321,7 @@ def main() -> int:
                 apply_modifications(command, uuid, modifications)
                 changed_due_dates += int(due_changed)
                 changed_slack_values += int(slack_changed)
+                released_links += int(link_released)
             except Exception as exc:
                 warnings.append(f"Roll {uuid[:8]} update failed: {exc}")
 
@@ -300,6 +330,11 @@ def main() -> int:
             updates.append(f"{changed_due_dates} due date{'s' if changed_due_dates != 1 else ''}")
         if changed_slack_values:
             updates.append(f"{changed_slack_values} slack value{'s' if changed_slack_values != 1 else ''}")
+        if released_links:
+            updates.append(
+                f"{released_links} completed link"
+                f"{'s' if released_links != 1 else ''} released"
+            )
         if updates:
             print(f"Roll updated {' and '.join(updates)}.")
         for warning in dict.fromkeys(warnings):
