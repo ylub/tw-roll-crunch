@@ -173,6 +173,16 @@ def calculate_schedule(
             memo[memo_key] = base_date_for(task)
             return memo[memo_key]
 
+        predecessor_uuid = str(predecessor_uuid)
+        if parse_duration(predecessor_uuid) is not None:
+            warnings.append(
+                f"Roll {uuid[:8]}: roll:{predecessor_uuid} is a duration, not a "
+                "predecessor UUID. Clear it with: "
+                f"task {uuid} modify roll:"
+            )
+            memo[memo_key] = None
+            return None
+
         if invalid_milestone(task):
             warnings.append(f"Roll {uuid[:8]}: invalid roll_fixed value.")
             memo[memo_key] = None
@@ -184,7 +194,6 @@ def calculate_schedule(
             memo[memo_key] = None
             return None
 
-        predecessor_uuid = str(predecessor_uuid)
         predecessor = by_uuid.get(predecessor_uuid)
         if not predecessor:
             warnings.append(f"Roll {uuid[:8]}: predecessor missing.")
@@ -201,7 +210,8 @@ def calculate_schedule(
         if predecessor.get("status") == "completed":
             predecessor_due = parse_task_date(predecessor.get("end"))
         if predecessor_due is None:
-            warnings.append(f"Roll {uuid[:8]}: predecessor has no due/end.")
+            if not predecessor.get("roll"):
+                warnings.append(f"Roll {uuid[:8]}: predecessor has no due/end.")
             memo[memo_key] = None
             return None
 

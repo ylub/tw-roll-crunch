@@ -1,7 +1,10 @@
 import datetime as dt
 import io
 import json
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from hooks import roll
@@ -114,6 +117,29 @@ class RollTests(unittest.TestCase):
         self.assertTrue(any("cycle" in warning.lower() for warning in warnings))
         self.assertTrue(any("predecessor missing" in warning for warning in warnings))
         self.assertTrue(any("invalid/missing offset" in warning for warning in warnings))
+
+    def test_duration_in_roll_gets_one_actionable_warning(self):
+        tasks = [
+            {"uuid": "A", "status": "pending", "due": "20260101T000000Z", "roll": "P1D"},
+            {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D"},
+        ]
+        _, _, warnings = roll.calculate_schedule(tasks)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("duration, not a predecessor UUID", warnings[0])
+        self.assertIn("modify roll:", warnings[0])
+
+    def test_task_roll_help_explains_roll_and_offset(self):
+        result = subprocess.run(
+            [sys.executable, "task_roll_help", "help"],
+            cwd=Path(__file__).parent.parent,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("roll:<UUID>", result.stdout)
+        self.assertIn("roll_offset:<duration>", result.stdout)
+        self.assertIn("Never use roll:P1D", result.stdout)
 
     def test_invalid_fixed_value_warns_without_changes(self):
         tasks = [

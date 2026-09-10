@@ -12,8 +12,10 @@ uda.crunch.values=LOW,MED,HIGH,CRITICAL
 uda.crunch_display.type=string
 uda.crunch_display.label=Crunch
 
-uda.roll.type=string
+uda.roll.type=uuid
 uda.roll.label=Roll
+
+alias.roll=execute task_roll_help
 
 uda.roll_offset.type=duration
 uda.roll_offset.label=Roll Offset

@@ -26,8 +26,10 @@ cd tw-roll-crunch
 sh ./install.sh
 ```
 
-The installer copies the hooks into `$HOME/.task/hooks`. It does not need
-administrator access and refuses to replace a hook with the same filename.
+The installer copies the hooks into `$HOME/.task/hooks` and installs
+`task_roll_help` in `$HOME/.local/bin`. It does not need administrator access and
+refuses to replace a hook or command with the same filename. Make sure
+`$HOME/.local/bin` is in `PATH`.
 If Taskwarrior uses a different data directory, provide its full path:
 
 ```sh
@@ -50,16 +52,16 @@ Verify the configuration and installed hooks:
 
 ```sh
 task rc.hooks=0 show >/dev/null
+task roll help >/dev/null
 task diagnostics
 ls -l "${TASKDATA:-$HOME/.task}/hooks/on-exit-roll.py" \
       "${TASKDATA:-$HOME/.task}/hooks/on-modify.crunch.py" \
       "${TASKDATA:-$HOME/.task}/hooks/on-add.crunch.py"
 ```
 
-The first command should finish without a configuration error. Under `Hooks`,
+The first two commands should finish without an error. Under `Hooks`,
 diagnostics should list all three files as active. The final command should
-also list all three; `on-add.crunch.py` should point to
-`on-modify.crunch.py`.
+also list all three; `on-add.crunch.py` should point to `on-modify.crunch.py`.
 
 ### Manual install
 
@@ -79,6 +81,8 @@ Roll only:
 
 ```sh
 install -m 0755 hooks/roll.py "$HOOK_DIR/on-exit-roll.py"
+mkdir -p "$HOME/.local/bin"
+install -m 0755 task_roll_help "$HOME/.local/bin/task_roll_help"
 ```
 
 Crunch only:
@@ -93,8 +97,9 @@ main installation steps. Taskwarrior normally uses `~/.taskrc`; `TASKRC` can
 select another file. The supported `include` syntax is documented in the
 [Taskwarrior configuration guide](https://taskwarrior.org/docs/configuration/).
 
-To uninstall, remove the three installed hook paths and the `include` line you
-added to your Taskwarrior config. Removing hooks does not delete task data.
+To uninstall, remove the three installed hook paths,
+`$HOME/.local/bin/task_roll_help`, and the `include` line you added to your
+Taskwarrior config. Removing hooks does not delete task data.
 
 ## Usage
 
@@ -118,6 +123,12 @@ Changing `remaining` does not move due dates. Roll schedules from
 See [docs/crunch.md](docs/crunch.md) for the complete scoring rules.
 
 ### Roll
+
+Show the field guide and copyable examples:
+
+```sh
+task roll help
+```
 
 Point each rolling task at its predecessor and set the spacing with
 `roll_offset`:
