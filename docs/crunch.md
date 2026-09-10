@@ -1,16 +1,29 @@
 # Crunch scoring
 
 Crunch estimates how hard a task is to finish on time from Taskwarrior's
-`duration`, `progress`, and built-in `due` fields.
+`remaining`, `progress`, and built-in `due` fields.
+
+## Fields
+
+- `remaining`: current estimated work left, entered as a Taskwarrior duration
+  such as `30m`, `18h`, or `2d`. Update it after each work session.
+- `progress`: optional manual percentage from 0 through 100. It affects only
+  the start bonus.
+- `due`: optional deadline used to calculate required work per day.
+
+```sh
+task TASK_ID modify remaining:18h progress:25
+```
+
+`remaining` is the authoritative estimate. Crunch never derives it from
+`progress`. Roll also ignores it; changing rolling due dates requires
+`roll_offset`.
 
 ## Formula
 
-Convert `duration` to hours and treat `progress` as a percentage from 0 through
-100. Remaining work is:
-
-```text
-remaining = duration * (1 - progress / 100)
-```
+Convert `remaining` to hours. Update it manually after work sessions. Treat
+`progress` as a manually maintained percentage from 0 through 100; it affects
+only the start bonus and does not reduce `remaining` again.
 
 When remaining work is zero, Crunch is unset and scoring stops.
 

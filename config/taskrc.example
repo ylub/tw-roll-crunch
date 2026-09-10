@@ -1,6 +1,6 @@
 # Portable UDA definitions for taskwarrior-roll-crunch.
-uda.duration.type=duration
-uda.duration.label=Duration
+uda.remaining.type=duration
+uda.remaining.label=Remaining
 
 uda.progress.type=numeric
 uda.progress.label=Progress

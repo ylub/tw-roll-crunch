@@ -98,6 +98,27 @@ added to your Taskwarrior config. Removing hooks does not delete task data.
 
 ## Usage
 
+### Crunch
+
+Set `remaining` to your current estimate of work left. Update it after each
+session. `progress` is an optional, manually maintained percentage:
+
+```sh
+task add "Long research task" due:2026-10-15 remaining:2d progress:0
+task TASK_ID modify remaining:18h progress:25
+```
+
+Crunch uses `remaining` directly for easy-task and deadline pressure. It does
+not reduce that estimate by `progress`; `progress` only affects the start
+bonus. Adding or modifying a task recalculates its Crunch level.
+
+Changing `remaining` does not move due dates. Roll schedules from
+`roll_offset`, which is calendar spacing rather than estimated work.
+
+See [docs/crunch.md](docs/crunch.md) for the complete scoring rules.
+
+### Roll
+
 Point each rolling task at its predecessor and set the spacing with
 `roll_offset`:
 
@@ -118,6 +139,20 @@ Roll uses a predecessor's `due` time while it is active. On completion, it
 applies `end + roll_offset` once and releases the ordinary child from the Roll
 link. See [docs/roll.md](docs/roll.md) for field semantics, fixed dates, errors,
 and cycle handling.
+
+## Upgrading from `duration`
+
+Older Crunch setups used a `duration` UDA for the work estimate. Back up your
+tasks and migrate those values before removing that UDA:
+
+```sh
+task rc.hooks=0 export > tasks-before-remaining.json
+task TASK_ID modify remaining:OLD_VALUE duration:
+```
+
+Repeat the second command for each task that has `duration`, using its existing
+value as `OLD_VALUE`. Keep both UDA definitions during the migration. Then
+update the Crunch hook, reports, and configuration to use `remaining`.
 
 ## Tests
 

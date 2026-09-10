@@ -34,15 +34,14 @@ def parse_due(value: str | None) -> datetime | None:
 
 
 def crunch_level(task: dict[str, Any], now: datetime | None = None) -> str | None:
-    duration = duration_hours(task.get("duration"))
-    if duration is None:
+    remaining = duration_hours(task.get("remaining"))
+    if remaining is None:
         return None
     try:
         progress = float(task.get("progress", 0) or 0)
     except (TypeError, ValueError):
         progress = 0
     progress = max(0, min(progress, 100))
-    remaining = duration * (1 - progress / 100)
     if remaining <= 0:
         return None
     start_bonus = max(0, 1.5 * (1 - progress / 25))
