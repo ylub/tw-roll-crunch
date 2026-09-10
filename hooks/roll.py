@@ -238,6 +238,28 @@ def calculate_schedule(
     return calculated, slack_hours, warnings
 
 
+def roll_mark_for(task: dict[str, Any], slack: float | None) -> str | None:
+    kind = milestone_kind(task)
+    if kind == "checkpoint":
+        milestone = "\U000f0a48"
+    elif kind == "finish-line":
+        milestone = "\uf4cd"
+    else:
+        return None
+
+    if slack is None:
+        return milestone
+    if slack < 0:
+        warning = "\ue3c7"
+    elif slack <= 12:
+        warning = "\ue3c5"
+    elif slack <= 24:
+        warning = "\ue3c6"
+    else:
+        return milestone
+    return f"{milestone} {warning}"
+
+
 def apply_modifications(command: str, uuid: str, modifications: list[str]) -> None:
     subprocess.run(
         [
@@ -315,6 +337,12 @@ def main() -> int:
             elif "roll_slack" in task:
                 modifications.append("roll_slack:")
                 slack_changed = True
+            new_mark = roll_mark_for(task, slack_hours.get(uuid))
+            old_mark = task.get("roll_mark")
+            if new_mark is not None and old_mark != new_mark:
+                modifications.append(f"roll_mark:{new_mark}")
+            elif new_mark is None and old_mark is not None:
+                modifications.append("roll_mark:")
             if not modifications:
                 continue
             try:

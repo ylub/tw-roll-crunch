@@ -9,6 +9,14 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
+CRUNCH_DISPLAY = {
+    "LOW": "\uf251 LOW",
+    "MED": "\uf252 MED",
+    "HIGH": "\U000f0955 HIGH",
+    "CRITICAL": "CRITICAL",
+}
+
+
 def duration_hours(value: str | None) -> float | None:
     if not value:
         return None
@@ -84,9 +92,10 @@ def update_task(task: dict[str, Any], now: datetime | None = None) -> dict[str, 
     level = crunch_level(task, now)
     if level:
         task["crunch"] = level
+        task["crunch_display"] = CRUNCH_DISPLAY[level]
     else:
         task.pop("crunch", None)
-    task.pop("crunch_display", None)
+        task.pop("crunch_display", None)
     return task
 
 

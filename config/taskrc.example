@@ -9,6 +9,9 @@ uda.crunch.type=string
 uda.crunch.label=Crunch
 uda.crunch.values=LOW,MED,HIGH,CRITICAL
 
+uda.crunch_display.type=string
+uda.crunch_display.label=Crunch
+
 uda.roll.type=string
 uda.roll.label=Roll
 
@@ -20,6 +23,9 @@ uda.roll_fixed.label=Finish-line Milestone
 
 uda.roll_slack.type=numeric
 uda.roll_slack.label=Roll Slack Hours
+
+uda.roll_mark.type=string
+uda.roll_mark.label=Roll
 
 # Optional generic capacity examples:
 # roll.capacity.client=20

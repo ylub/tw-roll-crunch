@@ -86,6 +86,10 @@ class RollTests(unittest.TestCase):
         _, slack, _ = roll.calculate_schedule([base, zero, late])
         self.assertEqual(slack, {"B": 0.0, "C": -24.0})
 
+    def test_checkpoint_display_is_glyph_only(self):
+        task = {"roll_fixed": "checkpoint"}
+        self.assertEqual(roll.roll_mark_for(task, None), "\U000f0a48")
+
     def test_longest_dotted_capacity_match(self):
         values = {"roll.capacity.client": "20", "roll.capacity.client.special": "5"}
         getter = lambda _command, key: values.get(key)

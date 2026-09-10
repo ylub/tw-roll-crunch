@@ -38,6 +38,10 @@ class CrunchTests(unittest.TestCase):
         task = {"remaining": "PT8H", "progress": 100, "due": "20260111T000000Z"}
         self.assertEqual(crunch.crunch_level(task, NOW), "HIGH")
 
+    def test_high_display_uses_clock_alert_glyph(self):
+        task = {"remaining": "PT16H", "progress": 50, "due": "20260111T000000Z"}
+        self.assertEqual(crunch.update_task(task, NOW)["crunch_display"], "\U000f0955 HIGH")
+
 
 if __name__ == "__main__":
     unittest.main()
