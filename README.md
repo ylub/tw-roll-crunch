@@ -5,7 +5,6 @@ Two dependency-free Taskwarrior hooks for keeping linked work scheduled:
 - **Roll** moves dependent due dates when their predecessor moves or finishes.
 - **Crunch** reports scheduling pressure without changing task dates.
 - Fixed checkpoints and finish-line milestones keep important dates stable.
-- Project capacity settings support informational longest dotted-prefix lookup.
 
 ## Requirements
 
@@ -128,6 +127,12 @@ Show the field guide and copyable examples:
 
 ```sh
 task roll help
+```
+
+Show active links, offsets, checkpoints, and finish lines:
+
+```sh
+task roll show
 ```
 
 Point each rolling task at its predecessor and set the spacing with

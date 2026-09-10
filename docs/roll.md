@@ -103,21 +103,6 @@ Dependency cycles have no valid first task. Roll detects a cycle, reports the
 affected tasks, and leaves their dates unchanged. Fix the dependency graph and
 run Taskwarrior again.
 
-## Capacity lookup
-
-Project capacity keys use longest dotted-prefix lookup. Given a project such
-as `alpha.beta.gamma`, Roll checks, in order:
-
-```text
-roll.capacity.alpha.beta.gamma
-roll.capacity.alpha.beta
-roll.capacity.alpha
-```
-
-The first configured value wins. If no project prefix is configured, no
-capacity applies. Capacity lookup is preserved and available, but is currently
-informational: it does not alter due dates, `roll_slack`, or Crunch results.
-
 ## Example
 
 ```sh

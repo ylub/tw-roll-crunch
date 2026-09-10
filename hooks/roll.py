@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Any, Callable
+from typing import Any
 
 UTC = dt.timezone.utc
 ROLLABLE_STATUSES = {"pending", "waiting"}
@@ -91,50 +91,6 @@ def task_run(command: str, *args: str) -> subprocess.CompletedProcess[str]:
 def export_tasks(command: str) -> list[dict[str, Any]]:
     data = json.loads(task_run(command, "rc.json.array=on", "export").stdout or "[]")
     return data if isinstance(data, list) else [data]
-
-
-def get_config(command: str, key: str) -> str | None:
-    result = subprocess.run(
-        [command, "rc.hooks=0", "rc.context=", "show", key],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    for line in result.stdout.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) == 2 and parts[0] == key:
-            return parts[1].strip() or None
-    return None
-
-
-def capacity_for_project(
-    command: str,
-    project: str | None,
-    cache: dict[str, tuple[float | None, str | None]] | None = None,
-    config_getter: Callable[[str, str], str | None] = get_config,
-) -> tuple[float | None, str | None]:
-    """Return hours/week and matched pool; longest dotted prefix wins."""
-    if not project:
-        return None, None
-    cache = cache if cache is not None else {}
-    if project in cache:
-        return cache[project]
-
-    parts = project.split(".")
-    for length in range(len(parts), 0, -1):
-        pool = ".".join(parts[:length])
-        raw = config_getter(command, f"roll.capacity.{pool}")
-        if raw is None:
-            continue
-        try:
-            capacity = float(raw)
-        except ValueError:
-            capacity = 0
-        cache[project] = (capacity, pool) if capacity > 0 else (None, pool)
-        return cache[project]
-
-    cache[project] = (None, None)
-    return cache[project]
 
 
 def base_date_for(task: dict[str, Any]) -> dt.datetime | None:

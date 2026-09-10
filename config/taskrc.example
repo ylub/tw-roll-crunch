@@ -28,7 +28,3 @@ uda.roll_slack.label=Roll Slack Hours
 
 uda.roll_mark.type=string
 uda.roll_mark.label=Roll
-
-# Optional generic capacity examples:
-# roll.capacity.client=20
-# roll.capacity.client.special=5

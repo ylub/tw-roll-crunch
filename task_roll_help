@@ -3,11 +3,18 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import shutil
+import subprocess
 import sys
+from typing import Any
 
 HELP = """Taskwarrior Roll
 
 Start here
+  task roll show          show active Roll links and milestones
   roll:<UUID>             predecessor task
   roll_offset:<duration>  gap after predecessor
   roll_fixed:checkpoint   fixed intermediate due date
@@ -24,11 +31,87 @@ Root tasks have a due date, but no roll or roll_offset.
 """
 
 
+def short_duration(value: Any) -> str:
+    text = str(value or "").upper()
+    match = re.fullmatch(
+        r"P(?:(?P<w>[0-9.]+)W)?(?:(?P<d>[0-9.]+)D)?"
+        r"(?:T(?:(?P<h>[0-9.]+)H)?(?:(?P<m>[0-9.]+)M)?(?:(?P<s>[0-9.]+)S)?)?",
+        text,
+    )
+    if not match:
+        return text or "—"
+    return " ".join(
+        f"{number}{unit}"
+        for unit, number in match.groupdict().items()
+        if number
+    )
+
+
+def render_rolls(tasks: list[dict[str, Any]]) -> str:
+    by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
+    active = {
+        uuid: task
+        for uuid, task in by_uuid.items()
+        if task.get("status") in {"pending", "waiting"}
+    }
+    rows = []
+    for task in active.values():
+        predecessor_uuid = str(task.get("roll") or "")
+        predecessor = by_uuid.get(predecessor_uuid)
+        fixed = str(task.get("roll_fixed") or "").lower()
+        if fixed in {"1", "yes", "true", "on", "fixed"}:
+            fixed = "finish-line"
+        if not task.get("roll") and not fixed:
+            continue
+        if predecessor:
+            source_id = predecessor.get("id") or predecessor_uuid[:8]
+            source = f'{source_id} {predecessor.get("description", "")}'
+        elif predecessor_uuid:
+            source = f"missing {predecessor_uuid[:8]}"
+        else:
+            source = "—"
+        target = f'{task.get("id", "—")} {task.get("description", "")}'
+        rows.append(
+            (
+                int(task.get("id") or 0),
+                source,
+                short_duration(task.get("roll_offset")),
+                target,
+                fixed or "—",
+            )
+        )
+    if not rows:
+        return "No active Roll links or milestones.\n"
+    lines = [f'{"FROM":<24}  {"OFFSET":<8}  {"TO":<24}  MILESTONE']
+    for _, source, offset, target, fixed in sorted(rows):
+        lines.append(f"{source[:24]:<24}  {offset:<8}  {target[:24]:<24}  {fixed}")
+    return "\n".join(lines) + "\n"
+
+
+def show() -> int:
+    command = os.environ.get("TASKWARRIOR_ROLL_TASK") or shutil.which("task") or "task"
+    try:
+        result = subprocess.run(
+            [command, "rc.hooks=0", "rc.context=", "rc.json.array=on", "export"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        tasks = json.loads(result.stdout or "[]")
+        print(render_rolls(tasks if isinstance(tasks, list) else [tasks]), end="")
+        return 0
+    except Exception as exc:
+        print(f"Roll show failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def main(arguments: list[str]) -> int:
     if not arguments or arguments in (["help"], ["--help"]):
         print(HELP, end="")
         return 0
-    print("Usage: task roll help", file=sys.stderr)
+    if arguments == ["show"]:
+        return show()
+    print("Usage: task roll help | task roll show", file=sys.stderr)
     return 2
 
 

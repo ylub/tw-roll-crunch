@@ -1,6 +1,7 @@
 import datetime as dt
 import io
 import json
+import runpy
 import subprocess
 import sys
 import unittest
@@ -93,18 +94,6 @@ class RollTests(unittest.TestCase):
         task = {"roll_fixed": "checkpoint"}
         self.assertEqual(roll.roll_mark_for(task, None), "\U000f0a48")
 
-    def test_longest_dotted_capacity_match(self):
-        values = {"roll.capacity.client": "20", "roll.capacity.client.special": "5"}
-        getter = lambda _command, key: values.get(key)
-        self.assertEqual(
-            roll.capacity_for_project("task", "client.special.deep", config_getter=getter),
-            (5.0, "client.special"),
-        )
-        self.assertEqual(
-            roll.capacity_for_project("task", "client.other", config_getter=getter),
-            (20.0, "client"),
-        )
-
     def test_bad_chain_warns_without_due(self):
         tasks = [
             {"uuid": "A", "status": "pending", "roll": "B", "roll_offset": "1d"},
@@ -140,6 +129,21 @@ class RollTests(unittest.TestCase):
         self.assertIn("roll:<UUID>", result.stdout)
         self.assertIn("roll_offset:<duration>", result.stdout)
         self.assertIn("Never use roll:P1D", result.stdout)
+
+    def test_roll_show_lists_links_offsets_and_milestones(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "description": "Draft"},
+            {"id": 2, "uuid": "B", "status": "pending", "description": "Review", "roll": "A", "roll_offset": "P2D"},
+            {"id": 3, "uuid": "C", "status": "waiting", "description": "Send", "roll": "B", "roll_offset": "PT1H30M", "roll_fixed": "finish-line"},
+            {"id": 4, "uuid": "D", "status": "pending", "description": "Approve", "roll": "B", "roll_offset": "PT2H", "roll_fixed": "checkpoint"},
+        ]
+        output = roll_help["render_rolls"](tasks)
+        self.assertIn("1 Draft", output)
+        self.assertIn("2d", output)
+        self.assertIn("1h 30m", output)
+        self.assertIn("finish-line", output)
+        self.assertIn("checkpoint", output)
 
     def test_invalid_fixed_value_warns_without_changes(self):
         tasks = [
