@@ -16,6 +16,7 @@ uda.roll.type=uuid
 uda.roll.label=Roll
 
 alias.roll=execute task_roll_help
+alias.rock=execute task_rock
 
 uda.roll_offset.type=duration
 uda.roll_offset.label=Roll Offset
@@ -26,5 +27,9 @@ uda.roll_fixed.label=Finish-line Milestone
 uda.roll_slack.type=numeric
 uda.roll_slack.label=Roll Slack Hours
 
+uda.r_mark.type=string
+uda.r_mark.label=R
+
+# Kept for one upgrade cycle so Roll can clear old marks safely.
 uda.roll_mark.type=string
-uda.roll_mark.label=Roll
+uda.roll_mark.label=Legacy Roll Mark

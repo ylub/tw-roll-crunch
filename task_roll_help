@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import re
@@ -11,14 +12,20 @@ import subprocess
 import sys
 from typing import Any
 
-HELP = """Taskwarrior Roll
+ROLL_HELP = """Taskwarrior Roll — live schedule
 
 Start here
   task roll show          show active Roll links and milestones
-  roll:<UUID>             predecessor task
-  roll_offset:<duration>  gap after predecessor
+  task roll view          same as task roll show
+  task roll validate      check links before relying on them
+  roll:<UUID>             child's predecessor
+  roll_offset:<duration>  child's gap after predecessor
   roll_fixed:checkpoint   fixed intermediate due date
   roll_fixed:finish-line  fixed final due date
+
+How Roll reads
+  CHILD stores both roll and roll_offset.
+  43 --2d--> 44 means task 44 is due 2 days after task 43.
 
 Link a task
   task CHILD modify roll:PREDECESSOR_UUID roll_offset:P1D
@@ -29,6 +36,113 @@ Fix roll:P1D mistake
 Never use roll:P1D. P1D belongs in roll_offset.
 Root tasks have a due date, but no roll or roll_offset.
 """
+
+ROCK_HELP = """Taskwarrior Rock — plan from a solid deadline
+
+Start here
+  task rock view/show     list Rock deadlines and required starts
+  task rock FINISH_ID     show one start-date plan
+  task rock FINISH_ID --apply
+                         set root due date when plan is clean
+
+How Rock reads
+  Rock starts at a finish-line due date and works backward through Roll gaps.
+  It prints one root-date command. Roll then moves ordinary children forward.
+
+Limits
+  Rock previews by default. --apply refuses warnings.
+  A checkpoint stops the plan. Completed or released links cannot be Rocked.
+"""
+
+HELP = ROLL_HELP
+
+
+def task_command() -> str:
+    return os.environ.get("TASKWARRIOR_ROLL_TASK") or shutil.which("task") or "task"
+
+
+def ansi(spec: str) -> str:
+    """Convert common Taskwarrior theme colors to ANSI."""
+    codes = []
+    background = False
+    named = {
+        "black": 0,
+        "red": 1,
+        "green": 2,
+        "yellow": 3,
+        "blue": 4,
+        "magenta": 5,
+        "cyan": 6,
+        "white": 7,
+    }
+    styles = {"bold": 1, "dim": 2, "italic": 3, "underline": 4, "inverse": 7}
+    for token in spec.lower().split():
+        if token == "on":
+            background = True
+        elif token in styles:
+            codes.append(str(styles[token]))
+        elif match := re.fullmatch(r"rgb([0-5])([0-5])([0-5])", token):
+            red, green, blue = (int(value) for value in match.groups())
+            codes.extend(("48" if background else "38", "5", str(16 + 36 * red + 6 * green + blue)))
+        elif match := re.fullmatch(r"color([0-9]{1,3})", token):
+            codes.extend(("48" if background else "38", "5", match.group(1)))
+        elif match := re.fullmatch(r"gray([0-9]|1[0-9]|2[0-3])", token):
+            codes.extend(("48" if background else "38", "5", str(232 + int(match.group(1)))))
+        elif token in named:
+            codes.append(str((40 if background else 30) + named[token]))
+    return f"\033[{';'.join(codes)}m" if codes else ""
+
+
+def active_theme(command: str) -> dict[str, str]:
+    if not sys.stdout.isatty() or "NO_COLOR" in os.environ or os.environ.get("TERM") == "dumb":
+        return {}
+    try:
+        result = subprocess.run(
+            [command, "rc.hooks=0", "rc.context=", "_show"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        config = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        return {
+            "header": ansi(config.get("color.header", "")),
+            "accent": ansi(config.get("color.uda.roll", "")),
+            "child": ansi(config.get("color.active", "")),
+            "warning": ansi(config.get("color.warning", "")),
+        }
+    except Exception:
+        return {}
+
+
+def paint(text: str, color: str = "") -> str:
+    return f"{color}{text}\033[0m" if color else text
+
+
+def render_help(
+    theme: dict[str, str] | None = None, help_text: str = ROLL_HELP
+) -> str:
+    theme = theme or {}
+    lines = []
+    for line in help_text.splitlines():
+        if line.startswith("Taskwarrior ") or line in {
+            "Start here",
+            "How Roll reads",
+            "How Rock reads",
+            "Link a task",
+            "Fix roll:P1D mistake",
+            "Limits",
+        }:
+            line = paint(line, theme.get("header", ""))
+        elif line.startswith("  "):
+            match = re.fullmatch(r"(  )(.*?)(\s{2,})(\S.*)", line)
+            if match:
+                line = f"{match.group(1)}{paint(match.group(2), theme.get('accent', ''))}{match.group(3)}{match.group(4)}"
+            else:
+                line = f"  {paint(line.strip(), theme.get('accent', ''))}"
+        elif line.startswith("Never use"):
+            line = paint(line, theme.get("warning", ""))
+        lines.append(line)
+    return "\n".join(lines) + "\n"
 
 
 def short_duration(value: Any) -> str:
@@ -47,7 +161,171 @@ def short_duration(value: Any) -> str:
     )
 
 
-def render_rolls(tasks: list[dict[str, Any]]) -> str:
+def parse_duration(value: Any) -> dt.timedelta | None:
+    text = str(value or "").strip().upper()
+    if not text:
+        return None
+    short = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([SMHDW])", text)
+    if short:
+        return dt.timedelta(seconds=float(short.group(1)) * {
+            "S": 1, "M": 60, "H": 3600, "D": 86400, "W": 604800,
+        }[short.group(2)])
+    match = re.fullmatch(
+        r"P(?:(?P<w>[0-9.]+)W)?(?:(?P<d>[0-9.]+)D)?"
+        r"(?:T(?:(?P<h>[0-9.]+)H)?(?:(?P<m>[0-9.]+)M)?(?:(?P<s>[0-9.]+)S)?)?",
+        text,
+    )
+    if not match or not any(match.groupdict().values()):
+        return None
+    return dt.timedelta(
+        weeks=float(match["w"] or 0), days=float(match["d"] or 0),
+        hours=float(match["h"] or 0), minutes=float(match["m"] or 0),
+        seconds=float(match["s"] or 0),
+    )
+
+
+def parse_date(value: Any) -> dt.datetime | None:
+    for fmt in ("%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return dt.datetime.strptime(str(value), fmt).replace(tzinfo=dt.timezone.utc)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def milestone_kind(task: dict[str, Any]) -> str | None:
+    value = str(task.get("roll_fixed") or "").strip().lower()
+    if value in {"1", "yes", "true", "on", "fixed"}:
+        return "finish-line"
+    return value if value in {"checkpoint", "finish-line"} else None
+
+
+def r_mark_for(task: dict[str, Any]) -> str | None:
+    kind = milestone_kind(task)
+    if kind == "checkpoint":
+        return "󰩈 checkpoint"
+    if kind == "finish-line":
+        return " finish-line"
+    if task.get("roll"):
+        return f"󰍃 +{short_duration(task.get('roll_offset'))}"
+    return None
+
+
+def task_label(task: dict[str, Any]) -> str:
+    return f'{task.get("id", "—")} {task.get("description", "")}'.strip()
+
+
+def find_task(tasks: list[dict[str, Any]], selector: str) -> dict[str, Any] | None:
+    matches = [
+        task for task in tasks
+        if str(task.get("id")) == selector
+        or str(task.get("uuid", "")).startswith(selector)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def rock_plan(tasks: list[dict[str, Any]], selector: str) -> dict[str, Any]:
+    by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
+    finish = find_task(tasks, selector)
+    warnings: list[str] = []
+    if not finish:
+        return {"warnings": [f"No unique task matches {selector!r}."]}
+    if milestone_kind(finish) != "finish-line":
+        return {"finish": finish, "warnings": ["Rock needs roll_fixed:finish-line."]}
+    required = parse_date(finish.get("due"))
+    if finish.get("status") not in {"pending", "waiting"} or required is None:
+        return {"finish": finish, "warnings": ["Finish-line needs active status and due date."]}
+    if not finish.get("roll"):
+        return {"finish": finish, "warnings": ["Finish-line needs a Roll predecessor."]}
+
+    path = [(finish, required)]
+    current = finish
+    seen: set[str] = set()
+    while current.get("roll"):
+        uuid = str(current.get("uuid", ""))
+        if uuid in seen:
+            warnings.append("Roll cycle blocks Rock.")
+            break
+        seen.add(uuid)
+        offset = parse_duration(current.get("roll_offset"))
+        if offset is None:
+            warnings.append(f"{task_label(current)} has invalid/missing roll_offset.")
+            break
+        predecessor = by_uuid.get(str(current["roll"]))
+        if not predecessor:
+            warnings.append(f"{task_label(current)} has missing predecessor.")
+            break
+        if predecessor.get("status") not in {"pending", "waiting"}:
+            warnings.append(f"{task_label(predecessor)} is completed or inactive.")
+            break
+        required -= offset
+        if milestone_kind(predecessor) == "checkpoint":
+            checkpoint_due = parse_date(predecessor.get("due"))
+            detail = f"; fixed {checkpoint_due.date()}" if checkpoint_due else ""
+            warnings.append(
+                f"Checkpoint {task_label(predecessor)} stops Rock: needs {required.date()}{detail}."
+            )
+            break
+        path.append((predecessor, required))
+        current = predecessor
+
+    if warnings:
+        return {"finish": finish, "path": path, "warnings": warnings}
+    root, start = path[-1]
+    next_uuid = str(path[-2][0].get("uuid", "")) if len(path) > 1 else ""
+    branches = [
+        task for task in tasks
+        if task.get("status") in {"pending", "waiting"}
+        and str(task.get("roll") or "") == str(root.get("uuid", ""))
+        and str(task.get("uuid", "")) != next_uuid
+    ]
+    if branches:
+        warnings.append(f"Changing {task_label(root)} also rolls {len(branches)} other active branch(es).")
+    return {"finish": finish, "path": path, "root": root, "start": start, "warnings": warnings}
+
+
+def render_rock_plan(plan: dict[str, Any]) -> str:
+    if not plan.get("root"):
+        return "ROCK — plan from a solid deadline\n\nBLOCKED: " + " ".join(plan["warnings"]) + "\n"
+    finish = plan["finish"]
+    root = plan["root"]
+    start = plan["start"]
+    path = " > ".join(task_label(task) for task, _ in reversed(plan["path"]))
+    lines = [
+        "ROCK — plan from a solid deadline",
+        "",
+        f"Deadline: {parse_date(finish.get('due')).date()}  {task_label(finish)}",
+        f"Start needed: {start.date()}  {task_label(root)}",
+        f"Path: {path}",
+        "",
+        "DRY RUN — apply this one anchor change:",
+        f"task {root['uuid']} modify due:{start.strftime('%Y%m%dT%H%M%SZ')}",
+    ]
+    lines.extend(f"WARN: {warning}" for warning in plan["warnings"])
+    return "\n".join(lines) + "\n"
+
+
+def apply_rock_plan(plan: dict[str, Any], command: str) -> None:
+    if not plan.get("root"):
+        raise ValueError("Rock plan is blocked.")
+    if plan["warnings"]:
+        raise ValueError("Rock --apply refuses plans with warnings.")
+    subprocess.run(
+        [
+            command,
+            "rc.context=",
+            str(plan["root"]["uuid"]),
+            "modify",
+            f"due:{plan['start'].strftime('%Y%m%dT%H%M%SZ')}",
+        ],
+        check=True,
+    )
+
+
+def render_rolls(
+    tasks: list[dict[str, Any]], theme: dict[str, str] | None = None
+) -> str:
+    theme = theme or {}
     by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
     active = {
         uuid: task
@@ -55,12 +333,15 @@ def render_rolls(tasks: list[dict[str, Any]]) -> str:
         if task.get("status") in {"pending", "waiting"}
     }
     rows = []
+    ignored = []
     for task in active.values():
         predecessor_uuid = str(task.get("roll") or "")
         predecessor = by_uuid.get(predecessor_uuid)
         fixed = str(task.get("roll_fixed") or "").lower()
         if fixed in {"1", "yes", "true", "on", "fixed"}:
             fixed = "finish-line"
+        if task.get("roll_offset") and not predecessor_uuid:
+            ignored.append(task)
         if not task.get("roll") and not fixed:
             continue
         if predecessor:
@@ -70,26 +351,125 @@ def render_rolls(tasks: list[dict[str, Any]]) -> str:
             source = f"missing {predecessor_uuid[:8]}"
         else:
             source = "—"
-        target = f'{task.get("id", "—")} {task.get("description", "")}'
+        target_id = str(task.get("id", "—"))
+        target = f'{target_id} {task.get("description", "")}'
         rows.append(
             (
                 int(task.get("id") or 0),
                 source,
                 short_duration(task.get("roll_offset")),
+                target_id,
                 target,
-                fixed or "—",
+                r_mark_for(task) or task.get("r_mark") or "—",
             )
         )
-    if not rows:
-        return "No active Roll links or milestones.\n"
-    lines = [f'{"FROM":<24}  {"OFFSET":<8}  {"TO":<24}  MILESTONE']
-    for _, source, offset, target, fixed in sorted(rows):
-        lines.append(f"{source[:24]:<24}  {offset:<8}  {target[:24]:<24}  {fixed}")
+    if rows:
+        header = f'{"PREDECESSOR":<24}  {"GAP":<8}  {"CHILD":<24}  R'
+        lines = [
+            "ROLL — live schedule",
+            "",
+            "Each row means: CHILD is due GAP after PREDECESSOR.",
+            "",
+            paint(header, theme.get("header", "")),
+        ]
+        for _, source, offset, target_id, target, marker in sorted(rows):
+            offset = f"{offset:<8}"
+            target = target[:24]
+            target = (
+                paint(target_id, theme.get("child", ""))
+                + target[len(target_id) :]
+                + " " * (24 - len(target))
+            )
+            marker = paint(marker, theme.get("warning", "")) if marker.endswith(("checkpoint", "finish-line")) else marker
+            lines.append(f"{source[:24]:<24}  {offset}  {target}  {marker}")
+    else:
+        lines = ["No active Roll links or milestones."]
+    if ignored:
+        lines.append("")
+        for task in sorted(ignored, key=lambda item: int(item.get("id") or 0)):
+            message = (
+                f'IGNORED {task.get("id", "—")} {task.get("description", "")}: '
+                f'roll_offset {short_duration(task.get("roll_offset"))} needs roll:<UUID>.'
+            )
+            lines.append(paint(message, theme.get("warning", "")))
+    return "\n".join(lines) + "\n"
+
+
+def validate_tasks(tasks: list[dict[str, Any]]) -> list[str]:
+    by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
+    warnings = []
+    for task in tasks:
+        if task.get("status") not in {"pending", "waiting"}:
+            continue
+        if task.get("roll_offset") and not task.get("roll"):
+            warnings.append(f"{task_label(task)}: roll_offset needs roll:<UUID>.")
+        fixed = task.get("roll_fixed")
+        if fixed and milestone_kind(task) is None:
+            warnings.append(f"{task_label(task)}: invalid roll_fixed value.")
+        if milestone_kind(task) and parse_date(task.get("due")) is None:
+            warnings.append(f"{task_label(task)}: fixed milestone needs due date.")
+        if not task.get("roll"):
+            continue
+        if parse_duration(task.get("roll_offset")) is None:
+            warnings.append(f"{task_label(task)}: invalid/missing roll_offset.")
+        predecessor = by_uuid.get(str(task["roll"]))
+        if not predecessor:
+            warnings.append(f"{task_label(task)}: predecessor missing.")
+            continue
+        if predecessor.get("status") not in {"pending", "waiting", "completed"}:
+            warnings.append(f"{task_label(task)}: predecessor status unusable.")
+            continue
+        root = predecessor
+        seen: set[str] = set()
+        while root.get("roll") and str(root.get("uuid", "")) not in seen:
+            seen.add(str(root.get("uuid", "")))
+            root = by_uuid.get(str(root["roll"]))
+            if root is None:
+                break
+        if root:
+            base = root.get("end") if root.get("status") == "completed" else root.get("due")
+            if parse_date(base) is None:
+                warnings.append(f"{task_label(root)}: chain root has no due/end date.")
+    for start in by_uuid:
+        seen: set[str] = set()
+        current = start
+        while current in by_uuid and by_uuid[current].get("roll"):
+            if current in seen:
+                warnings.append(f"Roll cycle at {current[:8]}.")
+                break
+            seen.add(current)
+            current = str(by_uuid[current]["roll"])
+    return list(dict.fromkeys(warnings))
+
+
+def render_rock_view(tasks: list[dict[str, Any]]) -> str:
+    finish_lines = [
+        task for task in tasks
+        if task.get("status") in {"pending", "waiting"}
+        and milestone_kind(task) == "finish-line"
+    ]
+    if not finish_lines:
+        return "ROCK — plan from a solid deadline\n\nNo active Rock deadlines.\n"
+    lines = [
+        "ROCK — plan from a solid deadline",
+        "",
+        f'{" FINISH-LINE":<28}  {"DEADLINE":<10}  {"START":<10}  STATUS',
+    ]
+    for finish in sorted(finish_lines, key=lambda task: int(task.get("id") or 0)):
+        plan = rock_plan(tasks, str(finish.get("uuid")))
+        deadline = parse_date(finish.get("due"))
+        start = plan.get("start")
+        status = "ready" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
+        lines.append(
+            f"{task_label(finish)[:28]:<28}  "
+            f"{str(deadline.date()) if deadline else '—':<10}  "
+            f"{str(start.date()) if start else '—':<10}  {status}"
+        )
     return "\n".join(lines) + "\n"
 
 
 def show() -> int:
-    command = os.environ.get("TASKWARRIOR_ROLL_TASK") or shutil.which("task") or "task"
+    command = task_command()
     try:
         result = subprocess.run(
             [command, "rc.hooks=0", "rc.context=", "rc.json.array=on", "export"],
@@ -98,20 +478,91 @@ def show() -> int:
             text=True,
         )
         tasks = json.loads(result.stdout or "[]")
-        print(render_rolls(tasks if isinstance(tasks, list) else [tasks]), end="")
+        print(
+            render_rolls(
+                tasks if isinstance(tasks, list) else [tasks], active_theme(command)
+            ),
+            end="",
+        )
         return 0
     except Exception as exc:
         print(f"Roll show failed: {exc}", file=sys.stderr)
         return 1
 
 
-def main(arguments: list[str]) -> int:
+def rock(arguments: list[str]) -> int:
     if not arguments or arguments in (["help"], ["--help"]):
-        print(HELP, end="")
+        print(render_help(active_theme(task_command()), ROCK_HELP), end="")
         return 0
-    if arguments == ["show"]:
+    command = task_command()
+    try:
+        result = subprocess.run(
+            [command, "rc.hooks=0", "rc.context=", "rc.json.array=on", "export"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        tasks = json.loads(result.stdout or "[]")
+        tasks = tasks if isinstance(tasks, list) else [tasks]
+    except Exception as exc:
+        print(f"Rock failed: {exc}", file=sys.stderr)
+        return 1
+    if arguments in (["view"], ["show"]):
+        print(render_rock_view(tasks), end="")
+        return 0
+    apply = "--apply" in arguments
+    selectors = [argument for argument in arguments if argument != "--apply"]
+    if len(selectors) == 1 and len(selectors) + int(apply) == len(arguments):
+        plan = rock_plan(tasks, selectors[0])
+        print(render_rock_plan(plan), end="")
+        if not apply:
+            return 0
+        try:
+            apply_rock_plan(plan, command)
+            print(f"APPLIED: {task_label(plan['root'])} due {plan['start'].date()}.")
+            return 0
+        except Exception as exc:
+            print(f"Rock --apply blocked: {exc}", file=sys.stderr)
+            return 1
+    print("Usage: task rock help | task rock view | task rock show | task rock FINISH_ID [--apply]", file=sys.stderr)
+    return 2
+
+
+def validate() -> int:
+    command = task_command()
+    try:
+        result = subprocess.run(
+            [command, "rc.hooks=0", "rc.context=", "rc.json.array=on", "export"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        tasks = json.loads(result.stdout or "[]")
+        warnings = validate_tasks(tasks if isinstance(tasks, list) else [tasks])
+    except Exception as exc:
+        print(f"Roll validate failed: {exc}", file=sys.stderr)
+        return 1
+    if warnings:
+        print("WARN: Roll validation found:")
+        print("\n".join(f"  {warning}" for warning in warnings))
+        return 1
+    print("OK: Roll links are valid.")
+    return 0
+
+
+def main(arguments: list[str]) -> int:
+    if arguments and arguments[0] == "rock":
+        return rock(arguments[1:])
+    if arguments and arguments[-1] == "rock":
+        return rock(arguments[:-1])
+    if not arguments or arguments in (["help"], ["--help"]):
+        print(render_help(active_theme(task_command())), end="")
+        return 0
+    if arguments in (["show"], ["view"]):
         return show()
-    print("Usage: task roll help | task roll show", file=sys.stderr)
+    if arguments == ["validate"]:
+        return validate()
+    print("Usage: task roll help | task roll show | task roll view | task roll validate", file=sys.stderr)
     return 2
 
 

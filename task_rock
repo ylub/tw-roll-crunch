@@ -1,0 +1,2 @@
+#!/bin/sh
+exec task_roll_help rock "$@"

@@ -77,6 +77,13 @@ the fixed date; negative slack means it arrives late.
 Treat `roll_slack` as Roll output. Do not use it as a substitute for
 `roll_offset`.
 
+### `r_mark`
+
+Roll writes a compact display marker for Taskwarrior reports. `󰍃 +GAP` means an
+ordinary rolling child, ` finish-line` marks a fixed finish-line deadline,
+and `󰩈 checkpoint` marks a fixed checkpoint. It is output only; edit `roll`,
+`roll_offset`, and `roll_fixed` instead.
+
 ## Fixed dates
 
 A checkpoint is an intermediate boundary. Roll does not overwrite the
@@ -91,6 +98,21 @@ is:
 ```text
 roll_fixed:finish-line
 ```
+
+## Rock
+
+Rock is the deadline-facing companion to Roll. Given an active finish-line,
+`task rock FINISH_ID` walks its single active predecessor path backward and
+prints the required root due date. By default it is a dry run; applying the
+root-date command lets ordinary Roll schedule the rest of the chain forward.
+
+`task rock FINISH_ID --apply` runs that root-date command when the plan has no
+warnings. It refuses checkpoint, missing-link, completed-path, and branch
+warnings instead of changing tasks.
+
+Rock requires a complete active path. It stops at a checkpoint and refuses to
+plan through completed or missing links. If the root feeds another active
+branch, Rock warns before printing the command.
 
 ## Errors and cycles
 

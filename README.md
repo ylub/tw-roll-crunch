@@ -82,6 +82,7 @@ Roll only:
 install -m 0755 hooks/roll.py "$HOOK_DIR/on-exit-roll.py"
 mkdir -p "$HOME/.local/bin"
 install -m 0755 task_roll_help "$HOME/.local/bin/task_roll_help"
+install -m 0755 task_rock "$HOME/.local/bin/task_rock"
 ```
 
 Crunch only:
@@ -97,7 +98,7 @@ select another file. The supported `include` syntax is documented in the
 [Taskwarrior configuration guide](https://taskwarrior.org/docs/configuration/).
 
 To uninstall, remove the three installed hook paths,
-`$HOME/.local/bin/task_roll_help`, and the `include` line you added to your
+`$HOME/.local/bin/task_roll_help`, `$HOME/.local/bin/task_rock`, and the `include` line you added to your
 Taskwarrior config. Removing hooks does not delete task data.
 
 ## Usage
@@ -129,11 +130,17 @@ Show the field guide and copyable examples:
 task roll help
 ```
 
-Show active links, offsets, checkpoints, and finish lines:
+Show live links, offsets, checkpoints, and Rock deadlines:
 
 ```sh
 task roll show
 ```
+
+`task roll view` is an alias for the same view.
+
+The `R` column gives each task's schedule role: `󰍃 +GAP` means Roll follows its
+predecessor, ` finish-line` means a fixed finish-line deadline, and
+`󰩈 checkpoint` marks a fixed checkpoint.
 
 Point each rolling task at its predecessor and set the spacing with
 `roll_offset`:
@@ -155,6 +162,33 @@ Roll uses a predecessor's `due` time while it is active. On completion, it
 applies `end + roll_offset` once and releases the ordinary child from the Roll
 link. See [docs/roll.md](docs/roll.md) for field semantics, fixed dates, errors,
 and cycle handling.
+
+### Rock
+
+Rock plans backward from a solid finish-line deadline. It never changes tasks:
+it shows the one root date that ordinary Roll should use to schedule the chain
+forward.
+
+```sh
+task rock view
+task rock show
+task rock FINISH_ID
+task rock FINISH_ID --apply
+```
+
+`task rock FINISH_ID` is a dry run. `--apply` changes the printed root due date
+only when the plan has no warnings; ordinary Roll then updates the chain.
+Rock stops at checkpoints and refuses to apply when moving the root would also
+roll another active branch.
+
+### Upgrading Roll displays
+
+Roll v2 writes `r_mark` instead of `roll_mark`. The supplied config defines
+both fields during the transition, and the new hook clears old marks as it
+updates tasks. An existing `include` picks this up after updating the clone; if
+you copied the UDA definitions instead, add `r_mark` before installing the new
+hook. In custom reports, replace `roll_mark` with `r_mark` and change the
+corresponding label to `R`.
 
 ## Upgrading from `duration`
 

@@ -63,6 +63,31 @@ def parse_duration(value: Any) -> dt.timedelta | None:
     return dt.timedelta(**values)
 
 
+def short_duration(value: Any) -> str:
+    duration = parse_duration(value)
+    if duration is None:
+        return str(value or "?")
+    seconds = duration.total_seconds()
+    if seconds < 0 or not seconds.is_integer():
+        return str(value)
+    seconds = int(seconds)
+    if seconds and seconds % 604800 == 0:
+        return f"{seconds // 604800}w"
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if seconds or not parts:
+        parts.append(f"{seconds}s")
+    return " ".join(parts)
+
+
 def milestone_kind(task: dict[str, Any]) -> str | None:
     value = str(task.get("roll_fixed") or "").strip().lower()
     if value in {"1", "yes", "true", "on", "fixed"}:
@@ -204,26 +229,20 @@ def calculate_schedule(
     return calculated, slack_hours, warnings
 
 
-def roll_mark_for(task: dict[str, Any], slack: float | None) -> str | None:
+def r_mark_for(task: dict[str, Any], slack: float | None) -> str | None:
     kind = milestone_kind(task)
     if kind == "checkpoint":
-        milestone = "\U000f0a48"
+        return "󰩈 checkpoint"
     elif kind == "finish-line":
-        milestone = "\uf4cd"
-    else:
-        return None
+        mark = " finish-line"
+        if slack is not None:
+            mark += f" {slack:+g}h"
+        return mark
 
-    if slack is None:
-        return milestone
-    if slack < 0:
-        warning = "\ue3c7"
-    elif slack <= 12:
-        warning = "\ue3c5"
-    elif slack <= 24:
-        warning = "\ue3c6"
-    else:
-        return milestone
-    return f"{milestone} {warning}"
+    if task.get("roll"):
+        offset = task.get("roll_offset")
+        return f"󰍃 +{short_duration(offset)}" if offset else "󰍃 ?"
+    return None
 
 
 def apply_modifications(command: str, uuid: str, modifications: list[str]) -> None:
@@ -303,11 +322,17 @@ def main() -> int:
             elif "roll_slack" in task:
                 modifications.append("roll_slack:")
                 slack_changed = True
-            new_mark = roll_mark_for(task, slack_hours.get(uuid))
-            old_mark = task.get("roll_mark")
+            marked_task = dict(task)
+            if release:
+                marked_task.pop("roll", None)
+                marked_task.pop("roll_offset", None)
+            new_mark = r_mark_for(marked_task, slack_hours.get(uuid))
+            old_mark = task.get("r_mark")
             if new_mark is not None and old_mark != new_mark:
-                modifications.append(f"roll_mark:{new_mark}")
+                modifications.append(f"r_mark:{new_mark}")
             elif new_mark is None and old_mark is not None:
+                modifications.append("r_mark:")
+            if "roll_mark" in task:
                 modifications.append("roll_mark:")
             if not modifications:
                 continue
