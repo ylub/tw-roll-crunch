@@ -1,4 +1,7 @@
 # Portable UDA definitions for taskwarrior-roll-crunch.
+# Let a due-today warning override the ordinary due color.
+rule.precedence.color=deleted,completed,active,keyword.,tag.,project.,overdue,scheduled,uda.,due,due.today,blocked,blocking,recurring,tagged
+
 uda.remaining.type=duration
 uda.remaining.label=Remaining
 
