@@ -347,16 +347,20 @@ def render_rolls(
         if predecessor:
             source_id = predecessor.get("id") or predecessor_uuid[:8]
             source = f'{source_id} {predecessor.get("description", "")}'
+            source_color_id = str(source_id)
         elif predecessor_uuid:
             source = f"missing {predecessor_uuid[:8]}"
+            source_color_id = ""
         else:
             source = "—"
+            source_color_id = ""
         target_id = str(task.get("id", "—"))
         target = f'{target_id} {task.get("description", "")}'
         rows.append(
             (
                 int(task.get("id") or 0),
                 source,
+                source_color_id,
                 short_duration(task.get("roll_offset")),
                 target_id,
                 target,
@@ -372,7 +376,12 @@ def render_rolls(
             "",
             paint(header, theme.get("header", "")),
         ]
-        for _, source, offset, target_id, target, marker in sorted(rows):
+        for _, source, source_color_id, offset, target_id, target, marker in sorted(rows):
+            source = source[:24]
+            source_length = len(source)
+            if source_color_id:
+                source = paint(source_color_id, theme.get("accent", "")) + source[len(source_color_id):]
+            source += " " * (24 - source_length)
             offset = f"{offset:<8}"
             target = target[:24]
             target = (
@@ -442,7 +451,11 @@ def validate_tasks(tasks: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(warnings))
 
 
-def render_rock_view(tasks: list[dict[str, Any]]) -> str:
+def render_rock_view(
+    tasks: list[dict[str, Any]], theme: dict[str, str] | None = None
+) -> str:
+    theme = theme or {}
+    by_uuid = {str(task.get("uuid")): task for task in tasks if task.get("uuid")}
     finish_lines = [
         task for task in tasks
         if task.get("status") in {"pending", "waiting"}
@@ -453,15 +466,38 @@ def render_rock_view(tasks: list[dict[str, Any]]) -> str:
     lines = [
         "ROCK — plan from a solid deadline",
         "",
-        f'{" FINISH-LINE":<28}  {"DEADLINE":<10}  {"START":<10}  STATUS',
+        paint(
+            f'{"PREDECESSOR":<24}  {" FINISH-LINE":<28}  {"DEADLINE":<10}  {"START":<10}  STATUS',
+            theme.get("header", ""),
+        ),
     ]
     for finish in sorted(finish_lines, key=lambda task: int(task.get("id") or 0)):
         plan = rock_plan(tasks, str(finish.get("uuid")))
         deadline = parse_date(finish.get("due"))
         start = plan.get("start")
         status = "ready" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
+        if status.startswith("WARN:"):
+            status = paint(status, theme.get("warning", ""))
+        label = task_label(finish)[:28]
+        task_id = str(finish.get("id", "—"))
+        label = (
+            paint(task_id, theme.get("child", ""))
+            + label[len(task_id):]
+            + " " * (28 - len(label))
+        )
+        predecessor = by_uuid.get(str(finish.get("roll") or ""))
+        if predecessor:
+            predecessor_id = str(predecessor.get("id") or predecessor["uuid"][:8])
+            predecessor_label = task_label(predecessor)[:24]
+            predecessor_label = (
+                paint(predecessor_id, theme.get("accent", ""))
+                + predecessor_label[len(predecessor_id):]
+                + " " * (24 - len(predecessor_label))
+            )
+        else:
+            predecessor_label = f'{"missing " + str(finish.get("roll") or "—")[:8]:<24}'
         lines.append(
-            f"{task_label(finish)[:28]:<28}  "
+            f"{predecessor_label}  {label}  "
             f"{str(deadline.date()) if deadline else '—':<10}  "
             f"{str(start.date()) if start else '—':<10}  {status}"
         )
@@ -508,7 +544,7 @@ def rock(arguments: list[str]) -> int:
         print(f"Rock failed: {exc}", file=sys.stderr)
         return 1
     if arguments in (["view"], ["show"]):
-        print(render_rock_view(tasks), end="")
+        print(render_rock_view(tasks, active_theme(command)), end="")
         return 0
     apply = "--apply" in arguments
     selectors = [argument for argument in arguments if argument != "--apply"]

@@ -199,6 +199,7 @@ class RollTests(unittest.TestCase):
         ]
         output = roll_help["render_rolls"](tasks, theme)
         self.assertIn("\033[1mPREDECESSOR", output)
+        self.assertIn("\033[35m1\033[0m Draft", output)
         self.assertNotIn("\033[35m2d", output)
         self.assertIn("\033[36m2\033[0m Review", output)
         self.assertIn("\033[33m󰩈 checkpoint", output)
@@ -271,6 +272,20 @@ class RollTests(unittest.TestCase):
         self.assertIn("ROCK — plan from a solid deadline", output.getvalue())
         self.assertIn(" FINISH-LINE", output.getvalue())
         self.assertEqual(run.call_args.args[0][-1], "export")
+
+    def test_rock_view_uses_roll_theme_roles(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        theme = {"header": "\033[1m", "accent": "\033[35m", "child": "\033[36m", "warning": "\033[33m"}
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "description": "Root"},
+            {"id": 2, "uuid": "B", "status": "pending", "description": "Ready", "roll": "A", "roll_offset": "P2D", "roll_fixed": "finish-line", "due": "20260920T000000Z"},
+            {"id": 3, "uuid": "C", "status": "pending", "description": "Blocked", "roll": "missing", "roll_offset": "P2D", "roll_fixed": "finish-line", "due": "20260920T000000Z"},
+        ]
+        output = roll_help["render_rock_view"](tasks, theme)
+        self.assertIn("\033[1mPREDECESSOR", output)
+        self.assertIn("\033[35m1\033[0m Root", output)
+        self.assertIn("\033[36m2\033[0m Ready", output)
+        self.assertIn("\033[33mWARN:", output)
 
     def test_rock_apply_updates_only_root(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
