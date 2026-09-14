@@ -7,6 +7,7 @@ color.uda.crunch.LOW=rgb034
 color.uda.crunch.MED=rgb045
 color.uda.crunch.HIGH=rgb530
 color.uda.crunch.CRITICAL=rgb500
+color.blocking=
 
 uda.remaining.type=duration
 uda.remaining.label=Remaining
