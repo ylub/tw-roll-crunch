@@ -1,6 +1,6 @@
-# Taskwarrior Roll + Crunch
+# Taskwarrior Roll/Rock + Crunch
 
-![Taskwarrior Roll + Crunch](assets/github-banner.png)
+![Taskwarrior Roll/Rock + Crunch](assets/github-banner.png)
 
 Two dependency-free Taskwarrior hooks for keeping linked work scheduled, plus
 Rock, Roll's companion planning command:
