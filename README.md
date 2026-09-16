@@ -1,9 +1,12 @@
 # Taskwarrior Roll + Crunch
 
+![Taskwarrior Roll + Crunch](assets/github-banner.png)
+
 Two dependency-free Taskwarrior hooks for keeping linked work scheduled:
 
 - **Roll** moves dependent due dates when their predecessor moves or finishes.
 - **Crunch** reports scheduling pressure without changing task dates.
+- **Rock** plans backward from a fixed finish-line deadline.
 - Fixed checkpoints and finish-line milestones keep important dates stable.
 
 ## Requirements
