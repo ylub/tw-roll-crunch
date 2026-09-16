@@ -2,11 +2,12 @@
 
 ![Taskwarrior Roll + Crunch](assets/github-banner.png)
 
-Two dependency-free Taskwarrior hooks for keeping linked work scheduled:
+Two dependency-free Taskwarrior hooks for keeping linked work scheduled, plus
+Rock, Roll's companion planning command:
 
 - **Roll** moves dependent due dates when their predecessor moves or finishes.
 - **Crunch** reports scheduling pressure without changing task dates.
-- **Rock** plans backward from a fixed finish-line deadline.
+- **Rock** plans backward through a Roll chain from a fixed finish-line deadline.
 - Fixed checkpoints and finish-line milestones keep important dates stable.
 
 ## Requirements
@@ -147,6 +148,9 @@ predecessor, ` finish-line` means a fixed finish-line deadline, and
 
 Point each rolling task at its predecessor and set the spacing with
 `roll_offset`:
+
+> **Warning:** Changing a predecessor's due date or completing it can update
+> the due dates of ordinary linked children.
 
 ```sh
 task TASK_ID modify roll:PREDECESSOR_UUID roll_offset:2d
