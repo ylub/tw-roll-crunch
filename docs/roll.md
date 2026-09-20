@@ -132,8 +132,8 @@ roll.capacity.posek.ch=8
 ```
 
 The longest dotted project match wins, so `posek.ch_12` uses `posek=25` while
-`posek.ch.section` uses `posek.ch=8`. `task rock view` shows `CAPACITY` on
-finish-lines as:
+`posek.ch.section` uses `posek.ch=8`. `task chain` shows each finish-line
+path with `CAPACITY` as:
 
 ```text
 (calendar days from today through deadline, including Saturday and Sunday)
@@ -196,9 +196,12 @@ weekdays. Chain keeps the first task on `--start` and the finish-line on
 start date. Existing final-task due time is preserved; absent a due time, Chain
 uses `16:00Z`.
 
-## Chains view
+## Chain browser
 
-`task chains view` groups active Roll links into one row per root-to-leaf path.
-It shows root, task count, start, finish or leaf, deadline, and schedule status.
-Branches appear as separate rows. Use `task roll view` for flexible links and
-`task rock view` for fixed finish-lines only.
+`task chain` groups active Roll links into numbered root-to-leaf paths. It
+shows root, task count, start, finish or leaf, deadline, capacity, and schedule
+status. Rock finish-lines show capacity; flexible paths show `—`. Branches
+appear as separate rows.
+
+Run `task chain NUMBER` to show every task in one path. Use `task roll show`
+only when you need the individual flexible Roll links and offsets.

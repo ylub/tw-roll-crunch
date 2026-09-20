@@ -2,7 +2,13 @@
 
 All notable changes are recorded here for each release.
 
-## [Unreleased]
+## [2026.09.20.1] - 2026-09-20
+
+### Changed
+
+- Release versions now use Calendar Versioning: `YYYY.MM.DD.REVISION`.
+- `task chain` replaces the separate Roll and Rock schedule views. It lists
+  numbered paths, shows Rock capacity, and opens one path with `task chain NUMBER`.
 
 ## [0.3.0] - 2026-09-20
 
