@@ -57,7 +57,7 @@ Verify the configuration and installed hooks:
 
 ```sh
 task rc.hooks=0 show >/dev/null
-task roll help >/dev/null
+task chain >/dev/null
 task diagnostics
 ls -l "${TASKDATA:-$HOME/.task}/hooks/on-exit-roll.py" \
       "${TASKDATA:-$HOME/.task}/hooks/on-modify.crunch.py" \
@@ -89,7 +89,7 @@ install -m 0755 hooks/roll.py "$HOOK_DIR/on-exit-roll.py"
 mkdir -p "$HOME/.local/bin"
 install -m 0755 task_roll_help "$HOME/.local/bin/task_roll_help"
 install -m 0755 task_rock "$HOME/.local/bin/task_rock"
-install -m 0755 task_chains "$HOME/.local/bin/task_chains"
+install -m 0755 task_chain "$HOME/.local/bin/task_chain"
 ```
 
 Crunch only:
@@ -105,7 +105,7 @@ select another file. The supported `include` syntax is documented in the
 [Taskwarrior configuration guide](https://taskwarrior.org/docs/configuration/).
 
 To uninstall, remove the three installed hook paths,
-`$HOME/.local/bin/task_roll_help`, `$HOME/.local/bin/task_rock`, and the `include` line you added to your
+`$HOME/.local/bin/task_roll_help`, `$HOME/.local/bin/task_rock`, `$HOME/.local/bin/task_chain`, and the `include` line you added to your
 Taskwarrior config. Removing hooks does not delete task data.
 
 ## Usage
@@ -156,7 +156,7 @@ roll.capacity.posek=25
 roll.capacity.other-project=12
 ```
 
-`task rock view` shows a `CAPACITY` value on each finish-line. It is the
+`task chain` adds `CAPACITY` for each Rock finish-line path. It is the
 available project hours from today through its deadline,
 including Saturday and Sunday, minus the path's total `remaining` estimate.
 `—` means the project has no capacity setting or a path task lacks `remaining`.
@@ -171,21 +171,24 @@ manual offset for those tasks.
 `task roll chain` creates a flexible chain. Use `task rock chain` with the
 same arguments when the final task must stay fixed at `--finish`.
 
-Show grouped active Roll paths:
+Show numbered active Roll paths, then inspect one path:
 
 ```sh
-task chains view
+task chain
+task chain 2
 ```
 
-Show live links, offsets, checkpoints, and Rock deadlines:
+`task chain` shows root, task count, start, finish or leaf, deadline, capacity,
+and status. `task chain NUMBER` shows every task in that path. Capacity is `—`
+for flexible paths.
+
+Show flexible link details and offsets:
 
 ```sh
 task roll show
 ```
 
-`task roll view` is an alias for the same view.
-
-The `R` column in `task roll view` shows only flexible Roll links:
+The `R` column in `task roll show` shows only flexible Roll links:
 `󰍃 +GAP` means the task follows its predecessor by that moving gap. Fixed
 checkpoints and Rock finish-lines appear in their dedicated views instead.
 
@@ -220,8 +223,6 @@ it shows the one root date that ordinary Roll should use to schedule the chain
 forward.
 
 ```sh
-task rock view
-task rock show
 task rock FINISH_ID
 task rock FINISH_ID --apply
 ```
@@ -231,8 +232,8 @@ only when the plan has no warnings; ordinary Roll then updates the chain.
 Rock stops at checkpoints and refuses to apply when moving the root would also
 roll another active branch.
 
-Rock and Roll views read capacity fresh from `~/.taskrc` each time. Add or
-change `roll.capacity.PROJECT=HOURS_PER_WEEK`, then rerun either view; no task
+`task chain` reads capacity fresh from `~/.taskrc` each time. Add or
+change `roll.capacity.PROJECT=HOURS_PER_WEEK`, then rerun it; no task
 modification or scheduler refresh is needed.
 
 ### Upgrading Roll displays

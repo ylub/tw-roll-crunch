@@ -16,14 +16,14 @@ ROLL_HELP = """Taskwarrior Roll — live schedule
 
 Start here
   task roll show          show flexible Roll links
-  task roll view          same as task roll show
   task roll validate      check links before relying on them
   task roll chain ...     preview or apply a weekday chain from UUID:description input
-  task chains view        show one row per active Roll path
+  task chain              list numbered active Roll paths
+  task chain NUMBER       show every task in one path
   roll:<UUID>             child's predecessor
   roll_offset:<duration>  child's gap after predecessor
   roll_fixed:checkpoint   fixed intermediate date (not shown here)
-  roll_fixed:finish-line  fixed Rock deadline (shown by task rock view)
+  roll_fixed:finish-line  fixed Rock deadline (shown by task chain)
 
 How Roll reads
   CHILD stores both roll and roll_offset.
@@ -42,7 +42,6 @@ Root tasks have a due date, but no roll or roll_offset.
 ROCK_HELP = """Taskwarrior Rock — plan from a solid deadline
 
 Start here
-  task rock view/show     list Rock deadlines and required starts
   task rock FINISH_ID     show one start-date plan
   task rock FINISH_ID --apply
                          set root due date when plan is clean
@@ -738,63 +737,6 @@ def validate_tasks(tasks: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(warnings))
 
 
-def render_rock_view(
-    tasks: list[dict[str, Any]], theme: dict[str, str] | None = None,
-    capacities: dict[str, float | None] | None = None,
-) -> str:
-    theme = theme or {}
-    capacities = capacities or {}
-    by_uuid = {str(task.get("uuid")): task for task in tasks if task.get("uuid")}
-    finish_lines = [
-        task for task in tasks
-        if task.get("status") in {"pending", "waiting"}
-        and milestone_kind(task) == "finish-line"
-    ]
-    if not finish_lines:
-        return "ROCK — plan from a solid deadline\n\nNo active Rock deadlines.\n"
-    lines = [
-        "ROCK — plan from a solid deadline",
-        "",
-        paint(
-            f'{"PREDECESSOR":<24}  {" FINISH-LINE":<28}  {"DEADLINE":<10}  {"START":<10}  {"CAPACITY":>9}  STATUS',
-            theme.get("header", ""),
-        ),
-    ]
-    for finish in sorted(finish_lines, key=lambda task: int(task.get("id") or 0)):
-        plan = rock_plan(tasks, str(finish.get("uuid")))
-        deadline = parse_date(finish.get("due"))
-        start = plan.get("start")
-        slack = weekday_capacity_slack(plan, capacities.get(str(finish.get("project") or "")))
-        capacity = f"{slack:+g}h" if slack is not None else "—"
-        status = "ready" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
-        if status.startswith("WARN:"):
-            status = paint(status, theme.get("warning", ""))
-        label = task_label(finish)[:28]
-        task_id = str(finish.get("id", "—"))
-        label = (
-            paint(task_id, theme.get("child", ""))
-            + label[len(task_id):]
-            + " " * (28 - len(label))
-        )
-        predecessor = by_uuid.get(str(finish.get("roll") or ""))
-        if predecessor:
-            predecessor_id = str(predecessor.get("id") or predecessor["uuid"][:8])
-            predecessor_label = task_label(predecessor)[:24]
-            predecessor_label = (
-                paint(predecessor_id, theme.get("accent", ""))
-                + predecessor_label[len(predecessor_id):]
-                + " " * (24 - len(predecessor_label))
-            )
-        else:
-            predecessor_label = f'{"missing " + str(finish.get("roll") or "—")[:8]:<24}'
-        lines.append(
-            f"{predecessor_label}  {label}  "
-            f"{str(deadline.date()) if deadline else '—':<10}  "
-            f"{str(start.date()) if start else '—':<10}  {capacity:>9}  {status}"
-        )
-    return "\n".join(lines) + "\n"
-
-
 def active_chain_paths(tasks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     active = {
         str(task.get("uuid")): task
@@ -824,22 +766,28 @@ def active_chain_paths(tasks: list[dict[str, Any]]) -> list[list[dict[str, Any]]
     return paths
 
 
+def sorted_chain_paths(tasks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    return sorted(active_chain_paths(tasks), key=lambda path: int(path[-1].get("id") or 0))
+
+
 def render_chains(
-    tasks: list[dict[str, Any]], theme: dict[str, str] | None = None
+    tasks: list[dict[str, Any]], theme: dict[str, str] | None = None,
+    capacities: dict[str, float | None] | None = None,
 ) -> str:
     theme = theme or {}
-    paths = active_chain_paths(tasks)
+    capacities = capacities or {}
+    paths = sorted_chain_paths(tasks)
     if not paths:
-        return "CHAINS — active Roll paths\n\nNo active complete Roll chains.\n"
-    header = f'{"ROOT":<24}  {"TASKS":>5}  {"START":<10}  {"FINISH / LEAF":<24}  {"DEADLINE":<10}  STATUS'
+        return "CHAIN — active Roll paths\n\nNo active complete Roll chains.\n"
+    header = f'{"#":>2}  {"ROOT":<24}  {"TASKS":>5}  {"START":<10}  {"FINISH / LEAF":<24}  {"DEADLINE":<10}  {"CAPACITY":>9}  STATUS'
     lines = [
-        "CHAINS — active Roll paths",
+        "CHAIN — active Roll paths",
         "",
-        "Each row is one leaf path. Branches appear as separate rows.",
+        "Run task chain NUMBER for every task in one path. Branches appear as separate rows.",
         "",
         paint(header, theme.get("header", "")),
     ]
-    for path in sorted(paths, key=lambda items: int(items[-1].get("id") or 0)):
+    for number, path in enumerate(paths, 1):
         root, leaf = path[0], path[-1]
         root_label = task_label(root)[:24]
         leaf_label = task_label(leaf)[:24]
@@ -852,16 +800,56 @@ def render_chains(
         if milestone_kind(leaf) == "finish-line":
             plan = rock_plan(tasks, str(leaf.get("uuid")))
             status = "READY" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
+            slack = weekday_capacity_slack(plan, capacities.get(str(leaf.get("project") or "")))
+            capacity = f"{slack:+g}h" if slack is not None else "—"
         else:
             status = "ROLLING"
+            capacity = "—"
         if status.startswith("WARN:"):
             status = paint(status, theme.get("warning", ""))
         lines.append(
-            f"{root_colored}{' ' * (24 - len(root_label))}  {len(path):>5}  "
+            f"{number:>2}  {root_colored}{' ' * (24 - len(root_label))}  {len(path):>5}  "
             f"{str(start.date()) if start else '—':<10}  "
             f"{leaf_colored}{' ' * (24 - len(leaf_label))}  "
-            f"{str(deadline.date()) if deadline else '—':<10}  {status}"
+            f"{str(deadline.date()) if deadline else '—':<10}  {capacity:>9}  {status}"
         )
+    return "\n".join(lines) + "\n"
+
+
+def render_chain_details(
+    tasks: list[dict[str, Any]], number: int, theme: dict[str, str] | None = None,
+    capacities: dict[str, float | None] | None = None,
+) -> str:
+    paths = sorted_chain_paths(tasks)
+    if number < 1 or number > len(paths):
+        return f"ERROR: Chain {number} is not listed. Run task chain.\n"
+    theme = theme or {}
+    capacities = capacities or {}
+    path = paths[number - 1]
+    root, leaf = path[0], path[-1]
+    lines = [
+        f"CHAIN {number} — {task_label(root)} to {task_label(leaf)}",
+        "",
+        paint(f'{"ID":>4}  {"TASK":<28}  {"STATUS":<8}  {"DUE":<16}  {"REMAINING":<10}  {"GAP":<8}  R', theme.get("header", "")),
+    ]
+    for task in path:
+        task_id = str(task.get("id") or task.get("uuid", "")[:8])
+        label = task_label(task)[len(task_id):].strip()[:28]
+        due = parse_date(task.get("due"))
+        marker = task.get("r_mark") or r_mark_for(task) or "—"
+        task_id = paint(f"{task_id:>4}", theme.get("child", ""))
+        lines.append(
+            f"{task_id}  {label:<28}  {str(task.get('status') or '—'):<8}  "
+            f"{due.strftime('%Y-%m-%d %H:%M') if due else '—':<16}  {short_duration(task.get('remaining')):<10}  "
+            f"{short_duration(task.get('roll_offset')):<8}  {marker}"
+        )
+    if milestone_kind(leaf) == "finish-line":
+        plan = rock_plan(tasks, str(leaf.get("uuid")))
+        slack = weekday_capacity_slack(plan, capacities.get(str(leaf.get("project") or "")))
+        capacity = f"{slack:+g}h" if slack is not None else "—"
+        deadline = parse_date(leaf.get("due"))
+        status = "READY" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
+        lines.extend(("", f"ROCK: deadline {deadline.date() if deadline else '—'}  capacity {capacity}  {status}"))
     return "\n".join(lines) + "\n"
 
 
@@ -886,11 +874,11 @@ def show() -> int:
 
 
 def chains(arguments: list[str]) -> int:
-    if not arguments or arguments in (["help"], ["--help"]):
-        print("Usage: task chains view | task chains show")
+    if arguments in (["help"], ["--help"]):
+        print("Usage: task chain [NUMBER]")
         return 0
-    if arguments not in (["view"], ["show"]):
-        print("Usage: task chains view | task chains show", file=sys.stderr)
+    if len(arguments) > 1 or (arguments and not arguments[0].isdigit()):
+        print("Usage: task chain [NUMBER]", file=sys.stderr)
         return 2
     command = task_command()
     try:
@@ -899,10 +887,16 @@ def chains(arguments: list[str]) -> int:
             check=True, capture_output=True, text=True,
         )
         tasks = json.loads(result.stdout or "[]")
-        print(render_chains(tasks if isinstance(tasks, list) else [tasks], active_theme(command)), end="")
+        tasks = tasks if isinstance(tasks, list) else [tasks]
+        theme = active_theme(command)
+        capacities = capacity_map(command, tasks)
+        if arguments:
+            print(render_chain_details(tasks, int(arguments[0]), theme, capacities), end="")
+        else:
+            print(render_chains(tasks, theme, capacities), end="")
         return 0
     except Exception as exc:
-        print(f"Chains view failed: {exc}", file=sys.stderr)
+        print(f"Chain failed: {exc}", file=sys.stderr)
         return 1
 
 
@@ -926,8 +920,8 @@ def rock(arguments: list[str]) -> int:
         print(f"Rock failed: {exc}", file=sys.stderr)
         return 1
     if arguments in (["view"], ["show"]):
-        print(render_rock_view(tasks, active_theme(command), capacity_map(command, tasks)), end="")
-        return 0
+        print("Use task chain for schedule views.", file=sys.stderr)
+        return 2
     apply = "--apply" in arguments
     selectors = [argument for argument in arguments if argument != "--apply"]
     if len(selectors) == 1 and len(selectors) + int(apply) == len(arguments):
@@ -942,7 +936,7 @@ def rock(arguments: list[str]) -> int:
         except Exception as exc:
             print(f"Rock --apply blocked: {exc}", file=sys.stderr)
             return 1
-    print("Usage: task rock help | task rock view | task rock show | task rock FINISH_ID [--apply] | task rock chain FILE --start YYYY-MM-DD --finish YYYY-MM-DD [--remaining 40m] [--apply]", file=sys.stderr)
+    print("Usage: task rock help | task rock FINISH_ID [--apply] | task rock chain FILE --start YYYY-MM-DD --finish YYYY-MM-DD [--remaining 40m] [--apply]", file=sys.stderr)
     return 2
 
 
@@ -980,11 +974,14 @@ def main(arguments: list[str]) -> int:
     if not arguments or arguments in (["help"], ["--help"]):
         print(render_help(active_theme(task_command())), end="")
         return 0
-    if arguments in (["show"], ["view"]):
+    if arguments == ["show"]:
         return show()
+    if arguments == ["view"]:
+        print("Use task chain for schedule views.", file=sys.stderr)
+        return 2
     if arguments == ["validate"]:
         return validate()
-    print("Usage: task roll help | task roll show | task roll view | task roll validate | task roll chain FILE --start YYYY-MM-DD --finish YYYY-MM-DD [--remaining 40m] [--apply]", file=sys.stderr)
+    print("Usage: task roll help | task roll show | task roll validate | task roll chain FILE --start YYYY-MM-DD --finish YYYY-MM-DD [--remaining 40m] [--apply]", file=sys.stderr)
     return 2
 
 

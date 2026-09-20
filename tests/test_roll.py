@@ -168,15 +168,16 @@ class RollTests(unittest.TestCase):
         self.assertIn("roll:<UUID>", result.stdout)
         self.assertIn("roll_offset:<duration>", result.stdout)
         self.assertIn("Never use roll:P1D", result.stdout)
-        self.assertIn("task roll view", result.stdout)
+        self.assertIn("task chain NUMBER", result.stdout)
         self.assertIn("CHILD stores both roll and roll_offset", result.stdout)
         self.assertIn("44 is due 2 days after task 43", result.stdout)
 
-    def test_roll_view_is_show_alias(self):
+    def test_roll_view_directs_to_chain(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         main = roll_help["main"]
-        with patch.dict(main.__globals__, {"show": lambda: 7}):
-            self.assertEqual(main(["view"]), 7)
+        with patch("sys.stderr", new_callable=io.StringIO) as error:
+            self.assertEqual(main(["view"]), 2)
+        self.assertIn("task chain", error.getvalue())
 
     def test_task_rock_alias_suffix_routes_to_rock(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -235,7 +236,7 @@ class RollTests(unittest.TestCase):
         self.assertIn("IGNORED 43 Chapter", output)
         self.assertIn("roll_offset 2d needs roll:<UUID>", output)
 
-    def test_chains_view_groups_active_leaf_paths(self):
+    def test_chain_lists_numbered_paths_and_capacity(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         tasks = [
             {"id": 1, "uuid": "A", "status": "pending", "description": "Draft", "due": "20260922T160000Z"},
@@ -243,28 +244,23 @@ class RollTests(unittest.TestCase):
             {"id": 3, "uuid": "C", "status": "pending", "description": "Send", "due": "20260924T160000Z", "roll": "B", "roll_offset": "P1D", "roll_fixed": "finish-line"},
             {"id": 4, "uuid": "D", "status": "pending", "description": "Other", "due": "20260925T160000Z", "roll": "B", "roll_offset": "P2D"},
         ]
-        output = roll_help["render_chains"](tasks)
-        self.assertIn("CHAINS — active Roll paths", output)
-        self.assertIn("Each row is one leaf path", output)
+        output = roll_help["render_chains"](tasks, capacities={})
+        self.assertIn("CHAIN — active Roll paths", output)
+        self.assertIn("task chain NUMBER", output)
         self.assertIn("1 Draft", output)
         self.assertIn("3 Send", output)
         self.assertIn("4 Other", output)
         self.assertIn("READY", output)
         self.assertIn("ROLLING", output)
 
-    def test_chains_route_calls_chains_view(self):
-        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
-        with patch.dict(roll_help["main"].__globals__, {"chains": lambda args: len(args)}):
-            self.assertEqual(roll_help["main"](["chains", "view"]), 1)
-
-    def test_task_chains_wrapper_routes_to_chains(self):
+    def test_task_chain_wrapper_routes_to_browser(self):
         result = subprocess.run(
-            ["sh", "task_chains", "--help"], cwd=Path(__file__).parent.parent,
+            ["sh", "task_chain", "--help"], cwd=Path(__file__).parent.parent,
             env={**os.environ, "PATH": f"{Path(__file__).parent.parent}:{os.environ['PATH']}"},
             text=True, capture_output=True, check=False,
         )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("task chains view", result.stdout)
+        self.assertIn("task chain [NUMBER]", result.stdout)
 
     def test_rock_plan_prints_one_root_change(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -310,36 +306,6 @@ class RollTests(unittest.TestCase):
         self.assertEqual(plan["root"]["uuid"], "A")
         self.assertIn("other active branch", plan["warnings"][0])
 
-    def test_rock_view_command_exports_and_renders(self):
-        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
-        tasks = [{
-            "id": 1, "uuid": "A", "status": "pending", "description": "Finish",
-            "roll_fixed": "finish-line", "due": "20260920T000000Z",
-        }]
-        result = subprocess.CompletedProcess([], 0, json.dumps(tasks), "")
-        with patch.object(roll_help["subprocess"], "run", return_value=result) as run, patch(
-            "sys.stdout", new_callable=io.StringIO
-        ) as output:
-            self.assertEqual(roll_help["rock"](["view"]), 0)
-            self.assertEqual(roll_help["rock"](["show"]), 0)
-        self.assertIn("ROCK — plan from a solid deadline", output.getvalue())
-        self.assertIn(" FINISH-LINE", output.getvalue())
-        self.assertEqual(run.call_args.args[0][-1], "export")
-
-    def test_rock_view_uses_roll_theme_roles(self):
-        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
-        theme = {"header": "\033[1m", "accent": "\033[35m", "child": "\033[36m", "warning": "\033[33m"}
-        tasks = [
-            {"id": 1, "uuid": "A", "status": "pending", "description": "Root"},
-            {"id": 2, "uuid": "B", "status": "pending", "description": "Ready", "roll": "A", "roll_offset": "P2D", "roll_fixed": "finish-line", "due": "20260920T000000Z"},
-            {"id": 3, "uuid": "C", "status": "pending", "description": "Blocked", "roll": "missing", "roll_offset": "P2D", "roll_fixed": "finish-line", "due": "20260920T000000Z"},
-        ]
-        output = roll_help["render_rock_view"](tasks, theme)
-        self.assertIn("\033[1mPREDECESSOR", output)
-        self.assertIn("\033[35m1\033[0m Root", output)
-        self.assertIn("\033[36m2\033[0m Ready", output)
-        self.assertIn("\033[33mWARN:", output)
-
     def test_capacity_slack_includes_weekend_days(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         tasks = [
@@ -352,15 +318,23 @@ class RollTests(unittest.TestCase):
         )
         self.assertEqual(slack, 10)
 
-    def test_rock_view_shows_capacity_slack(self):
+    def test_chain_shows_capacity_and_path_details(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         tasks = [
             {"id": 1, "uuid": "A", "status": "pending", "description": "Root", "remaining": "PT1H"},
             {"id": 2, "uuid": "B", "status": "pending", "description": "Finish", "project": "posek.ch", "remaining": "PT1H", "roll": "A", "roll_offset": "P1D", "roll_fixed": "finish-line", "due": "20260920T160000Z"},
         ]
-        output = roll_help["render_rock_view"](tasks, capacities={"posek.ch": 70})
+        output = roll_help["render_chains"](tasks, capacities={"posek.ch": 70})
+        self.assertIn("ROOT", output)
+        self.assertIn("TASKS", output)
+        self.assertIn("START", output)
         self.assertIn("CAPACITY", output)
-        self.assertIn("h  ready", output)
+        self.assertIn("h  READY", output)
+        detail = roll_help["render_chain_details"](tasks, 1, capacities={"posek.ch": 70})
+        self.assertIn("CHAIN 1", detail)
+        self.assertIn("Root", detail)
+        self.assertIn("Finish", detail)
+        self.assertIn("ROCK: deadline", detail)
 
     def test_roll_view_hides_rock_finish_line(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))

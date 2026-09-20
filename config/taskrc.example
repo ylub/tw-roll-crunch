@@ -27,7 +27,7 @@ uda.roll.label=Roll
 
 alias.roll=execute task_roll_help
 alias.rock=execute task_rock
-alias.chains=execute task_chains
+alias.chain=execute task_chain
 
 uda.roll_offset.type=duration
 uda.roll_offset.label=Roll Offset
