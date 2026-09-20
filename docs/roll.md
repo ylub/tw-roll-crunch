@@ -46,9 +46,17 @@ task TASK_ID modify roll:PREDECESSOR_UUID
 
 ### `roll_offset`
 
-Sets the Taskwarrior duration between a predecessor's base date and this
-task's due date. Use ordinary Taskwarrior duration values such as `2d`, `4d`,
-or `1w`.
+Stores the calculated duration between a predecessor's base date and this
+task's due date. When the linked task has both `remaining` and a matching
+`roll.capacity.PROJECT`, Roll sets it to:
+
+```text
+remaining hours / weekly capacity * 7 calendar days
+```
+
+Saturday and Sunday count. The value is rounded to a 30-minute slot and recalculated
+after task changes. Tasks without capacity or `remaining` keep their existing
+manual offset.
 
 ### `roll_fixed`
 
@@ -114,6 +122,28 @@ Rock requires a complete active path. It stops at a checkpoint and refuses to
 plan through completed or missing links. If the root feeds another active
 branch, Rock warns before printing the command.
 
+### Capacity cushion
+
+Set weekly hours in `~/.taskrc`:
+
+```ini
+roll.capacity.posek=25
+roll.capacity.posek.ch=8
+```
+
+The longest dotted project match wins, so `posek.ch_12` uses `posek=25` while
+`posek.ch.section` uses `posek.ch=8`. `task rock view` shows `CAPACITY` on
+finish-lines as:
+
+```text
+(calendar days from today through deadline, including Saturday and Sunday)
+* weekly capacity / 7 - total path remaining
+```
+
+Positive hours are spare capacity; negative hours mean the path exceeds that
+capacity. `—` means capacity or a `remaining` estimate is missing. This value
+is read fresh on every view and does not move due dates or change `R_mark`.
+
 ## Errors and cycles
 
 Roll refuses to guess when a schedule cannot be calculated safely. Typical
@@ -147,16 +177,28 @@ task '/yv-/' _zshuuids | rg ':write yv-' > yv-chain.txt
 task roll chain yv-chain.txt --start 2026-09-22 --finish 2026-10-07 --remaining 40m
 ```
 
-`task rock chain` accepts the same command. It uses the same implementation:
-Roll writes the chain and Rock verifies its hard finish-line. There is no
-separate Rock scheduler to drift from Roll.
+`task roll chain` makes a flexible Roll path: every date, including the last,
+can move. `task rock chain` accepts the same command but locks the last task at
+`--finish` as its hard finish-line.
 
-Chain schedules one task on each weekday, preserves normal Taskwarrior
-`depends`, writes `remaining` as estimated work left, and makes the final task
-a hard `roll_fixed:finish-line`. It previews only. Review the printed Rock path,
-then rerun the same command with `--apply` to change tasks.
+Chain spreads tasks across the requested weekdays, preserves normal Taskwarrior
+`depends`, and writes `remaining` as estimated work left. It previews only.
+`task roll chain` makes a flexible schedule; `task rock chain` makes the final
+task a hard `roll_fixed:finish-line`.
 
-The number of selected tasks must exactly match weekday slots from `--start`
-through `--finish`; Chain refuses to guess a schedule. The root waits until the
+`--remaining 40m` assigns one estimate to every selected task. Omit
+`--remaining` to preserve each task's existing `remaining` value; Chain refuses
+to apply when any selected task has no estimate and lists all missing tasks.
+
+Several tasks may share a weekday when the list is longer than the available
+weekdays. Chain keeps the first task on `--start` and the finish-line on
+`--finish`. The root waits until the
 start date. Existing final-task due time is preserved; absent a due time, Chain
 uses `16:00Z`.
+
+## Chains view
+
+`task chains view` groups active Roll links into one row per root-to-leaf path.
+It shows root, task count, start, finish or leaf, deadline, and schedule status.
+Branches appear as separate rows. Use `task roll view` for flexible links and
+`task rock view` for fixed finish-lines only.

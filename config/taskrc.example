@@ -27,6 +27,7 @@ uda.roll.label=Roll
 
 alias.roll=execute task_roll_help
 alias.rock=execute task_rock
+alias.chains=execute task_chains
 
 uda.roll_offset.type=duration
 uda.roll_offset.label=Roll Offset
@@ -36,6 +37,9 @@ uda.roll_fixed.label=Finish-line Milestone
 
 uda.roll_slack.type=numeric
 uda.roll_slack.label=Roll Slack Hours
+
+# Optional weekly project capacity; dotted children inherit their parent.
+# roll.capacity.posek=25
 
 uda.r_mark.type=string
 uda.r_mark.label=R

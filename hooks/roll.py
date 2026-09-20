@@ -88,6 +88,15 @@ def short_duration(value: Any) -> str:
     return " ".join(parts)
 
 
+def format_duration(value: dt.timedelta) -> str:
+    seconds = round(value.total_seconds() / 1800) * 1800
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    parts = (f"{hours}H" if hours else "") + (f"{minutes}M" if minutes else "") + (f"{seconds}S" if seconds else "")
+    return f"P{days}D" + (f"T{parts}" if parts else "")
+
+
 def milestone_kind(task: dict[str, Any]) -> str | None:
     value = str(task.get("roll_fixed") or "").strip().lower()
     if value in {"1", "yes", "true", "on", "fixed"}:
@@ -116,6 +125,53 @@ def task_run(command: str, *args: str) -> subprocess.CompletedProcess[str]:
 def export_tasks(command: str) -> list[dict[str, Any]]:
     data = json.loads(task_run(command, "rc.json.array=on", "export").stdout or "[]")
     return data if isinstance(data, list) else [data]
+
+
+def config_value(command: str, key: str) -> str | None:
+    result = task_run(command, "show", key)
+    for line in result.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0] == key:
+            return parts[1].strip() or None
+    return None
+
+
+def project_capacity(command: str, project: str | None, cache: dict[str, float | None]) -> float | None:
+    if not project:
+        return None
+    if project in cache:
+        return cache[project]
+    parts = project.split(".")
+    for length in range(len(parts), 0, -1):
+        raw = config_value(command, "roll.capacity." + ".".join(parts[:length]))
+        if raw is None:
+            continue
+        try:
+            capacity = float(raw)
+        except ValueError:
+            break
+        cache[project] = capacity if capacity > 0 else None
+        return cache[project]
+    cache[project] = None
+    return None
+
+
+def refresh_offsets(tasks: list[dict[str, Any]], command: str) -> dict[str, str]:
+    """Derive each linked task's calendar offset from remaining/project capacity."""
+    cache: dict[str, float | None] = {}
+    changes: dict[str, str] = {}
+    for task in tasks:
+        if task.get("status") not in ROLLABLE_STATUSES or not task.get("roll"):
+            continue
+        remaining = parse_duration(task.get("remaining"))
+        capacity = project_capacity(command, task.get("project"), cache)
+        if remaining is None or capacity is None:
+            continue
+        offset = format_duration(dt.timedelta(days=7 * remaining.total_seconds() / 3600 / capacity))
+        if task.get("roll_offset") != offset:
+            changes[str(task["uuid"])] = offset
+            task["roll_offset"] = offset
+    return changes
 
 
 def base_date_for(task: dict[str, Any]) -> dt.datetime | None:
@@ -234,10 +290,7 @@ def r_mark_for(task: dict[str, Any], slack: float | None) -> str | None:
     if kind == "checkpoint":
         return "󰩈 checkpoint"
     elif kind == "finish-line":
-        mark = " finish-line"
-        if slack is not None:
-            mark += f" {slack:+g}h"
-        return mark
+        return " finish-line"
 
     if task.get("roll"):
         offset = task.get("roll_offset")
@@ -277,6 +330,7 @@ def main() -> int:
             and task.get("uuid")
         }
         tasks = export_tasks(command)
+        offset_changes = refresh_offsets(tasks, command)
         calculated, slack_hours, warnings = calculate_schedule(tasks)
         by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
         changed_due_dates = 0
@@ -308,6 +362,8 @@ def main() -> int:
             ):
                 modifications.append(f"due:{format_task_date(calculated[uuid])}")
                 due_changed = True
+            if uuid in offset_changes and not release:
+                modifications.append(f"roll_offset:{offset_changes[uuid]}")
             if release:
                 modifications.extend(("roll:", "roll_offset:"))
                 link_released = True

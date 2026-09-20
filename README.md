@@ -5,6 +5,8 @@
 Two dependency-free Taskwarrior hooks for keeping linked work scheduled, plus
 Rock, Roll's companion planning command:
 
+Release notes: [CHANGELOG.md](CHANGELOG.md)
+
 - **Roll** moves dependent due dates when their predecessor moves or finishes.
 - **Crunch** reports scheduling pressure without changing task dates.
 - **Rock** plans backward through a Roll chain from a fixed finish-line deadline.
@@ -87,6 +89,7 @@ install -m 0755 hooks/roll.py "$HOOK_DIR/on-exit-roll.py"
 mkdir -p "$HOME/.local/bin"
 install -m 0755 task_roll_help "$HOME/.local/bin/task_roll_help"
 install -m 0755 task_rock "$HOME/.local/bin/task_rock"
+install -m 0755 task_chains "$HOME/.local/bin/task_chains"
 ```
 
 Crunch only:
@@ -142,8 +145,37 @@ task '/yv-/' _zshuuids | rg ':write yv-' > yv-chain.txt
 task roll chain yv-chain.txt --start 2026-09-22 --finish 2026-10-07 --remaining 40m
 ```
 
-Use `task rock chain` with identical arguments when starting from the
-finish-line view; it uses the same validated builder.
+Omit `--remaining` when selected tasks already have different `remaining`
+estimates; Chain preserves them and lists every task without one.
+
+Set weekly capacity for a project in `~/.taskrc`; dotted child projects inherit
+their nearest parent value:
+
+```ini
+roll.capacity.posek=25
+roll.capacity.other-project=12
+```
+
+`task rock view` shows a `CAPACITY` value on each finish-line. It is the
+available project hours from today through its deadline,
+including Saturday and Sunday, minus the path's total `remaining` estimate.
+`—` means the project has no capacity setting or a path task lacks `remaining`.
+The `CAPACITY` column is a feasibility signal; it does not change `R_mark`.
+
+For every linked task with `remaining` and a matching capacity, Roll calculates
+its moving `roll_offset` as `remaining hours / weekly capacity * 7 days`.
+Saturday and Sunday count. Roll rounds to 30-minute slots and refreshes the
+offset and downstream flexible dates after any task change; do not enter a
+manual offset for those tasks.
+
+`task roll chain` creates a flexible chain. Use `task rock chain` with the
+same arguments when the final task must stay fixed at `--finish`.
+
+Show grouped active Roll paths:
+
+```sh
+task chains view
+```
 
 Show live links, offsets, checkpoints, and Rock deadlines:
 
@@ -153,9 +185,9 @@ task roll show
 
 `task roll view` is an alias for the same view.
 
-The `R` column gives each task's schedule role: `󰍃 +GAP` means Roll follows its
-predecessor, ` finish-line` means a fixed finish-line deadline, and
-`󰩈 checkpoint` marks a fixed checkpoint.
+The `R` column in `task roll view` shows only flexible Roll links:
+`󰍃 +GAP` means the task follows its predecessor by that moving gap. Fixed
+checkpoints and Rock finish-lines appear in their dedicated views instead.
 
 Point each rolling task at its predecessor and set the spacing with
 `roll_offset`:
@@ -198,6 +230,10 @@ task rock FINISH_ID --apply
 only when the plan has no warnings; ordinary Roll then updates the chain.
 Rock stops at checkpoints and refuses to apply when moving the root would also
 roll another active branch.
+
+Rock and Roll views read capacity fresh from `~/.taskrc` each time. Add or
+change `roll.capacity.PROJECT=HOURS_PER_WEEK`, then rerun either view; no task
+modification or scheduler refresh is needed.
 
 ### Upgrading Roll displays
 

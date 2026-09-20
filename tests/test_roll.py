@@ -1,6 +1,7 @@
 import datetime as dt
 import io
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -98,8 +99,24 @@ class RollTests(unittest.TestCase):
         task = {"roll_fixed": "checkpoint"}
         self.assertEqual(roll.r_mark_for(task, None), "󰩈 checkpoint")
         self.assertEqual(
-            roll.r_mark_for({"roll_fixed": "finish-line"}, -6), " finish-line -6h"
+            roll.r_mark_for({"roll_fixed": "finish-line"}, -6), " finish-line"
         )
+
+    def test_roll_r_mark_uses_only_its_explicit_offset(self):
+        self.assertEqual(
+            roll.r_mark_for({"roll": "A", "roll_offset": "P3D"}, None), "󰍃 +3d"
+        )
+
+    def test_refresh_offsets_uses_remaining_and_weekly_capacity(self):
+        tasks = [
+            {"uuid": "A", "status": "pending", "due": "20260101T000000Z"},
+            {"uuid": "B", "status": "pending", "project": "posek.ch", "remaining": "PT10H", "roll": "A", "roll_offset": "P1D"},
+        ]
+        with patch.object(roll, "project_capacity", return_value=25):
+            changes = roll.refresh_offsets(tasks, "task")
+        self.assertEqual(changes, {"B": "P2DT19H"})
+        due, _, _ = roll.calculate_schedule(tasks)
+        self.assertEqual(due["B"], dt.datetime(2026, 1, 3, 19, tzinfo=UTC))
 
     def test_roll_replaces_legacy_mark(self):
         tasks = [
@@ -169,7 +186,7 @@ class RollTests(unittest.TestCase):
 
     def test_rock_chain_routes_to_shared_chain_builder(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
-        with patch.dict(roll_help["rock"].__globals__, {"chain": lambda args: len(args)}):
+        with patch.dict(roll_help["rock"].__globals__, {"chain": lambda args, **kwargs: len(args)}):
             self.assertEqual(roll_help["rock"](["chain", "tasks.txt"]), 1)
 
     def test_roll_show_lists_links_offsets_and_milestones(self):
@@ -185,9 +202,8 @@ class RollTests(unittest.TestCase):
         self.assertIn("PREDECESSOR", output)
         self.assertIn("1 Draft", output)
         self.assertIn("2d", output)
-        self.assertIn("1h 30m", output)
-        self.assertIn(" finish-line", output)
-        self.assertIn("󰩈 checkpoint", output)
+        self.assertNotIn(" finish-line", output)
+        self.assertNotIn("󰩈 checkpoint", output)
 
     def test_roll_output_uses_three_theme_roles(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -201,14 +217,14 @@ class RollTests(unittest.TestCase):
         }
         tasks = [
             {"id": 1, "uuid": "A", "status": "pending", "description": "Draft"},
-            {"id": 2, "uuid": "B", "status": "pending", "description": "Review", "roll": "A", "roll_offset": "P2D", "roll_fixed": "checkpoint"},
+            {"id": 2, "uuid": "B", "status": "pending", "description": "Review", "roll": "A", "roll_offset": "P2D"},
         ]
         output = roll_help["render_rolls"](tasks, theme)
         self.assertIn("\033[1mPREDECESSOR", output)
         self.assertIn("\033[35m1\033[0m Draft", output)
         self.assertNotIn("\033[35m2d", output)
         self.assertIn("\033[36m2\033[0m Review", output)
-        self.assertIn("\033[33m󰩈 checkpoint", output)
+        self.assertNotIn("\033[33m", output)
 
     def test_roll_show_explains_ignored_root_offset(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -218,6 +234,37 @@ class RollTests(unittest.TestCase):
         output = roll_help["render_rolls"](tasks)
         self.assertIn("IGNORED 43 Chapter", output)
         self.assertIn("roll_offset 2d needs roll:<UUID>", output)
+
+    def test_chains_view_groups_active_leaf_paths(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "description": "Draft", "due": "20260922T160000Z"},
+            {"id": 2, "uuid": "B", "status": "pending", "description": "Review", "due": "20260923T160000Z", "roll": "A", "roll_offset": "P1D"},
+            {"id": 3, "uuid": "C", "status": "pending", "description": "Send", "due": "20260924T160000Z", "roll": "B", "roll_offset": "P1D", "roll_fixed": "finish-line"},
+            {"id": 4, "uuid": "D", "status": "pending", "description": "Other", "due": "20260925T160000Z", "roll": "B", "roll_offset": "P2D"},
+        ]
+        output = roll_help["render_chains"](tasks)
+        self.assertIn("CHAINS — active Roll paths", output)
+        self.assertIn("Each row is one leaf path", output)
+        self.assertIn("1 Draft", output)
+        self.assertIn("3 Send", output)
+        self.assertIn("4 Other", output)
+        self.assertIn("READY", output)
+        self.assertIn("ROLLING", output)
+
+    def test_chains_route_calls_chains_view(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        with patch.dict(roll_help["main"].__globals__, {"chains": lambda args: len(args)}):
+            self.assertEqual(roll_help["main"](["chains", "view"]), 1)
+
+    def test_task_chains_wrapper_routes_to_chains(self):
+        result = subprocess.run(
+            ["sh", "task_chains", "--help"], cwd=Path(__file__).parent.parent,
+            env={**os.environ, "PATH": f"{Path(__file__).parent.parent}:{os.environ['PATH']}"},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("task chains view", result.stdout)
 
     def test_rock_plan_prints_one_root_change(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -293,6 +340,37 @@ class RollTests(unittest.TestCase):
         self.assertIn("\033[36m2\033[0m Ready", output)
         self.assertIn("\033[33mWARN:", output)
 
+    def test_capacity_slack_includes_weekend_days(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"uuid": "A", "status": "pending", "remaining": "PT10H"},
+            {"uuid": "B", "status": "pending", "remaining": "PT10H", "roll": "A", "roll_offset": "P1D", "roll_fixed": "finish-line", "due": "20260920T160000Z"},
+        ]
+        plan = roll_help["rock_plan"](tasks, "B")
+        slack = roll_help["weekday_capacity_slack"](
+            plan, 70, dt.datetime(2026, 9, 18, tzinfo=UTC)
+        )
+        self.assertEqual(slack, 10)
+
+    def test_rock_view_shows_capacity_slack(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "description": "Root", "remaining": "PT1H"},
+            {"id": 2, "uuid": "B", "status": "pending", "description": "Finish", "project": "posek.ch", "remaining": "PT1H", "roll": "A", "roll_offset": "P1D", "roll_fixed": "finish-line", "due": "20260920T160000Z"},
+        ]
+        output = roll_help["render_rock_view"](tasks, capacities={"posek.ch": 70})
+        self.assertIn("CAPACITY", output)
+        self.assertIn("h  ready", output)
+
+    def test_roll_view_hides_rock_finish_line(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "description": "Root", "remaining": "PT1H"},
+            {"id": 2, "uuid": "B", "status": "pending", "description": "Finish", "project": "posek.ch", "remaining": "PT1H", "roll": "A", "roll_offset": "P1D", "roll_fixed": "finish-line", "due": "20260920T160000Z"},
+        ]
+        output = roll_help["render_rolls"](tasks)
+        self.assertEqual(output, "No active Roll links or milestones.\n")
+
     def test_rock_apply_updates_only_root(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         plan = {
@@ -355,7 +433,7 @@ class RollTests(unittest.TestCase):
             options = roll_help["parse_chain"]([
                 source.name, "--start", "2026-09-22", "--finish", "2026-09-24", "--remaining", "40m",
             ])
-            candidate, selected = roll_help["chain_candidate"](tasks, options)
+            candidate, selected = roll_help["chain_candidate"](tasks, options, hard_finish=True)
         by_uuid = {task["uuid"]: task for task in candidate}
         self.assertEqual(selected, uuids)
         self.assertEqual(by_uuid[uuids[0]]["wait"], "2026-09-22")
@@ -365,12 +443,67 @@ class RollTests(unittest.TestCase):
         self.assertEqual(by_uuid[uuids[-1]]["remaining"], "PT40M")
         self.assertEqual(str(roll_help["rock_plan"](candidate, uuids[-1])["start"].date()), "2026-09-22")
 
+    def test_chain_spreads_extra_tasks_without_requiring_one_per_weekday(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        uuids = [f"{index:08d}-1111-1111-1111-111111111111" for index in range(1, 5)]
+        tasks = [
+            {"id": index, "uuid": uuid, "status": "pending", "description": "write", "remaining": "PT10M"}
+            for index, uuid in enumerate(uuids, 1)
+        ]
+        tasks[-1]["due"] = "20260923T160000Z"
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as source:
+            source.write("\n".join(f"{uuid}:write" for uuid in uuids))
+            source.flush()
+            options = roll_help["parse_chain"]([source.name, "--start", "2026-09-22", "--finish", "2026-09-23"])
+            candidate, _ = roll_help["chain_candidate"](tasks, options)
+        due_dates = [task["due"][:8] for task in candidate]
+        self.assertEqual(due_dates[0], "20260922")
+        self.assertEqual(due_dates[-1], "20260923")
+        self.assertEqual(due_dates.count("20260922"), 2)
+        self.assertNotIn("roll_fixed", candidate[-1])
+
     def test_chain_parser_accepts_stdin_marker(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         options = roll_help["parse_chain"]([
             "-", "--start", "2026-09-22", "--finish", "2026-09-23", "--remaining", "40m",
         ])
         self.assertEqual(options["file"], "-")
+
+    def test_chain_preserves_existing_remaining_without_batch_value(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        uuids = [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ]
+        tasks = [
+            {"id": 1, "uuid": uuids[0], "status": "pending", "description": "First", "remaining": "PT20M"},
+            {"id": 2, "uuid": uuids[1], "status": "pending", "description": "Last", "remaining": "PT1H", "due": "20260923T160000Z"},
+        ]
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as source:
+            source.write("\n".join(f"{uuid}:task" for uuid in uuids))
+            source.flush()
+            options = roll_help["parse_chain"]([
+                source.name, "--start", "2026-09-22", "--finish", "2026-09-23",
+            ])
+            candidate, _ = roll_help["chain_candidate"](tasks, options)
+        self.assertNotIn("remaining", options)
+        self.assertEqual(candidate[0]["remaining"], "PT20M")
+        self.assertEqual(candidate[1]["remaining"], "PT1H")
+
+    def test_chain_lists_every_missing_remaining_estimate(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "11111111-1111-1111-1111-111111111111", "status": "pending", "description": "First"},
+            {"id": 2, "uuid": "22222222-2222-2222-2222-222222222222", "status": "pending", "description": "Last", "due": "20260923T160000Z"},
+        ]
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as source:
+            source.write("\n".join(f"{task['uuid']}:task" for task in tasks))
+            source.flush()
+            options = roll_help["parse_chain"]([
+                source.name, "--start", "2026-09-22", "--finish", "2026-09-23",
+            ])
+            with self.assertRaisesRegex(ValueError, "1 First, 2 Last"):
+                roll_help["chain_candidate"](tasks, options)
 
     def test_chain_help_is_available_from_roll_and_rock(self):
         script = Path(__file__).parent.parent / "task_roll_help"

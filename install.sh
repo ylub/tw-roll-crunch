@@ -21,7 +21,7 @@ for target in on-exit-roll.py on-modify.crunch.py on-add.crunch.py; do
     }
 done
 
-for target in task_roll_help task_rock; do
+for target in task_roll_help task_rock task_chains; do
     [ ! -e "$bin/$target" ] && [ ! -L "$bin/$target" ] || {
         echo "Refusing to replace existing command: $bin/$target" >&2
         exit 1
@@ -33,6 +33,7 @@ install -m 755 "$root/hooks/crunch.py" "$hooks/on-modify.crunch.py"
 ln -s on-modify.crunch.py "$hooks/on-add.crunch.py"
 install -m 755 "$root/task_roll_help" "$bin/task_roll_help"
 install -m 755 "$root/task_rock" "$bin/task_rock"
+install -m 755 "$root/task_chains" "$bin/task_chains"
 
 echo "Hooks installed in $hooks"
 echo "Roll help installed at $bin/task_roll_help"
