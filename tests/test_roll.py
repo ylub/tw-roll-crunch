@@ -4,6 +4,7 @@ import json
 import runpy
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -165,6 +166,11 @@ class RollTests(unittest.TestCase):
         main = roll_help["main"]
         with patch.dict(main.__globals__, {"rock": lambda args: len(args)}):
             self.assertEqual(main(["view", "rock"]), 1)
+
+    def test_rock_chain_routes_to_shared_chain_builder(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        with patch.dict(roll_help["rock"].__globals__, {"chain": lambda args: len(args)}):
+            self.assertEqual(roll_help["rock"](["chain", "tasks.txt"]), 1)
 
     def test_roll_show_lists_links_offsets_and_milestones(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -330,6 +336,51 @@ class RollTests(unittest.TestCase):
         ])
         self.assertTrue(any("no due/end" in warning for warning in warnings))
         self.assertTrue(any("fixed milestone needs due" in warning for warning in warnings))
+
+    def test_chain_candidate_uses_uuid_list_weekdays_and_finish_line(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        uuids = [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+            "33333333-3333-3333-3333-333333333333",
+        ]
+        tasks = [
+            {"id": index + 1, "uuid": uuid, "status": "pending", "description": f"write {index}"}
+            for index, uuid in enumerate(uuids)
+        ]
+        tasks[-1]["due"] = "20260924T160000Z"
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as source:
+            source.write("\n".join(f"{uuid}:write {index}" for index, uuid in enumerate(uuids)))
+            source.flush()
+            options = roll_help["parse_chain"]([
+                source.name, "--start", "2026-09-22", "--finish", "2026-09-24", "--remaining", "40m",
+            ])
+            candidate, selected = roll_help["chain_candidate"](tasks, options)
+        by_uuid = {task["uuid"]: task for task in candidate}
+        self.assertEqual(selected, uuids)
+        self.assertEqual(by_uuid[uuids[0]]["wait"], "2026-09-22")
+        self.assertEqual(by_uuid[uuids[1]]["roll_offset"], "P1D")
+        self.assertEqual(by_uuid[uuids[-1]]["roll_fixed"], "finish-line")
+        self.assertEqual(by_uuid[uuids[-1]]["due"], "20260924T160000Z")
+        self.assertEqual(by_uuid[uuids[-1]]["remaining"], "PT40M")
+        self.assertEqual(str(roll_help["rock_plan"](candidate, uuids[-1])["start"].date()), "2026-09-22")
+
+    def test_chain_parser_accepts_stdin_marker(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        options = roll_help["parse_chain"]([
+            "-", "--start", "2026-09-22", "--finish", "2026-09-23", "--remaining", "40m",
+        ])
+        self.assertEqual(options["file"], "-")
+
+    def test_chain_help_is_available_from_roll_and_rock(self):
+        script = Path(__file__).parent.parent / "task_roll_help"
+        for arguments in (("chain", "--help"), ("rock", "chain", "--help")):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [sys.executable, script, *arguments], text=True, capture_output=True, check=False
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assertIn("UUID:description", result.stdout)
 
     def test_invalid_fixed_value_warns_without_changes(self):
         tasks = [

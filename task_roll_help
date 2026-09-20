@@ -18,6 +18,7 @@ Start here
   task roll show          show active Roll links and milestones
   task roll view          same as task roll show
   task roll validate      check links before relying on them
+  task roll chain ...     preview or apply a weekday chain from UUID:description input
   roll:<UUID>             child's predecessor
   roll_offset:<duration>  child's gap after predecessor
   roll_fixed:checkpoint   fixed intermediate due date
@@ -44,6 +45,7 @@ Start here
   task rock FINISH_ID     show one start-date plan
   task rock FINISH_ID --apply
                          set root due date when plan is clean
+  task rock chain ...     build and Rock-check a selected weekday chain
 
 How Rock reads
   Rock starts at a finish-line due date and works backward through Roll gaps.
@@ -52,6 +54,22 @@ How Rock reads
 Limits
   Rock previews by default. --apply refuses warnings.
   A checkpoint stops the plan. Completed or released links cannot be Rocked.
+"""
+
+CHAIN_HELP = """Taskwarrior Roll + Rock — chain a selected list
+
+Input
+  task '/yv-/' _zshuuids | rg ':write yv-' > yv-chain.txt
+  task roll chain yv-chain.txt --start YYYY-MM-DD --finish YYYY-MM-DD --remaining 40m
+
+How Chain reads
+  Input is one UUID:description line per task. Line order is chain order.
+  Chain schedules one task per weekday, preserves normal depends, and makes
+  final task a hard Roll finish-line.
+
+Safety
+  Preview is default. Add --apply only after preview shows right path.
+  Start, finish, and task count must fit exact weekday slots.
 """
 
 HELP = ROLL_HELP
@@ -191,6 +209,200 @@ def parse_date(value: Any) -> dt.datetime | None:
         except (TypeError, ValueError):
             pass
     return None
+
+
+def parse_day(value: str) -> dt.date | None:
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def format_duration(value: dt.timedelta) -> str:
+    seconds = int(value.total_seconds())
+    if seconds <= 0:
+        raise ValueError("Duration must be positive.")
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if days and not hours and not minutes and not seconds:
+        return f"P{days}D"
+    date_part = f"{days}D" if days else ""
+    time_part = "".join(
+        part for part in (f"{hours}H" if hours else "", f"{minutes}M" if minutes else "", f"{seconds}S" if seconds else "") if part
+    )
+    return f"P{date_part}T{time_part}"
+
+
+def weekday_dates(start: dt.date, finish: dt.date, count: int) -> list[dt.date]:
+    if start.weekday() > 4 or finish.weekday() > 4:
+        raise ValueError("Start and finish must both be weekdays.")
+    dates: list[dt.date] = []
+    current = start
+    while current <= finish:
+        if current.weekday() < 5:
+            dates.append(current)
+        current += dt.timedelta(days=1)
+    if len(dates) != count:
+        raise ValueError(
+            f"{count} tasks do not fit {len(dates)} weekday slots from {start} through {finish}."
+        )
+    return dates
+
+
+def read_chain(path: str) -> list[str]:
+    try:
+        if path == "-":
+            source = sys.stdin.read()
+        else:
+            with open(path, encoding="utf-8") as input_file:
+                source = input_file.read()
+    except OSError as exc:
+        raise ValueError(f"Cannot read {path!r}: {exc}") from exc
+    uuids: list[str] = []
+    for number, line in enumerate(source.splitlines(), 1):
+        if not line.strip():
+            continue
+        match = re.fullmatch(r"\s*(?:-\s*)?([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}):.+", line)
+        if not match:
+            raise ValueError(f"Line {number} is not UUID:description.")
+        uuid = match.group(1).lower()
+        if uuid in uuids:
+            raise ValueError(f"Line {number} repeats {uuid}.")
+        uuids.append(uuid)
+    if len(uuids) < 2:
+        raise ValueError("Chain needs at least two UUID:description lines.")
+    return uuids
+
+
+def parse_chain(arguments: list[str]) -> dict[str, Any]:
+    options: dict[str, Any] = {"apply": False}
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--apply":
+            options["apply"] = True
+        elif argument in {"--start", "--finish", "--remaining"}:
+            index += 1
+            if index == len(arguments):
+                raise ValueError(f"{argument} needs a value.")
+            options[argument[2:]] = arguments[index]
+        elif argument == "-" and "file" not in options:
+            options["file"] = argument
+        elif argument.startswith("-"):
+            raise ValueError(f"Unknown option {argument!r}.")
+        elif "file" not in options:
+            options["file"] = argument
+        else:
+            raise ValueError("Chain accepts one input file, or - for stdin.")
+        index += 1
+    missing = [name for name in ("file", "start", "finish", "remaining") if name not in options]
+    if missing:
+        raise ValueError("Missing " + ", ".join(f"--{name}" for name in missing) + ".")
+    start = parse_day(options["start"])
+    finish = parse_day(options["finish"])
+    duration = parse_duration(options["remaining"])
+    if start is None or finish is None:
+        raise ValueError("Use YYYY-MM-DD for --start and --finish.")
+    if finish < start:
+        raise ValueError("Finish must not precede start.")
+    if duration is None or duration.total_seconds() <= 0:
+        raise ValueError("--remaining needs a positive duration such as 40m.")
+    options.update(start=start, finish=finish, remaining=format_duration(duration))
+    return options
+
+
+def chain_candidate(tasks: list[dict[str, Any]], options: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    selected = read_chain(options["file"])
+    dates = weekday_dates(options["start"], options["finish"], len(selected))
+    by_uuid = {str(task.get("uuid", "")).lower(): task for task in tasks}
+    missing = [uuid for uuid in selected if uuid not in by_uuid]
+    if missing:
+        raise ValueError("Task missing: " + ", ".join(missing))
+    inactive = [task_label(by_uuid[uuid]) for uuid in selected if by_uuid[uuid].get("status") not in {"pending", "waiting"}]
+    if inactive:
+        raise ValueError("Chain tasks must be pending or waiting: " + ", ".join(inactive))
+    candidate = [dict(task) for task in tasks]
+    candidate_by_uuid = {str(task.get("uuid", "")).lower(): task for task in candidate}
+    final_due = parse_date(candidate_by_uuid[selected[-1]].get("due"))
+    due_time = final_due.strftime("%H%M%SZ") if final_due else "160000Z"
+    for index, uuid in enumerate(selected):
+        task = candidate_by_uuid[uuid]
+        task["remaining"] = options["remaining"]
+        task["due"] = dates[index].strftime("%Y%m%dT") + due_time
+        task.pop("roll_slack", None)
+        if index == 0:
+            task.pop("roll", None)
+            task.pop("roll_offset", None)
+            task.pop("roll_fixed", None)
+            task["wait"] = dates[index].isoformat()
+            continue
+        task["roll"] = selected[index - 1]
+        gap = dates[index] - dates[index - 1]
+        task["roll_offset"] = f"P{gap.days}D"
+        if index == len(selected) - 1:
+            task["roll_fixed"] = "finish-line"
+        else:
+            task.pop("roll_fixed", None)
+    return candidate, selected
+
+
+def render_chain_plan(candidate: list[dict[str, Any]], selected: list[str], options: dict[str, Any]) -> str:
+    plan = rock_plan(candidate, selected[-1])
+    body = render_rock_plan(plan).rstrip()
+    lines = [
+        "CHAIN — selected Roll schedule",
+        "",
+        f"Tasks: {len(selected)}  Remaining: {options['remaining']} each  Weekdays only",
+        body,
+    ]
+    if not options["apply"]:
+        lines.extend(("", "DRY RUN — rerun with --apply to write this chain."))
+    return "\n".join(lines) + "\n"
+
+
+def modify_task(command: str, task: dict[str, Any], hooks: bool) -> None:
+    arguments = [command, "rc.context=", "rc.confirmation=off"]
+    if not hooks:
+        arguments.append("rc.hooks=0")
+    arguments.extend((str(task["uuid"]), "modify"))
+    for field in ("remaining", "due", "wait", "roll", "roll_offset", "roll_fixed"):
+        value = task.get(field)
+        arguments.append(f"{field}:{value}" if value else f"{field}:")
+    subprocess.run(arguments, check=True, capture_output=True, text=True)
+
+
+def chain(arguments: list[str]) -> int:
+    try:
+        if not arguments or arguments in (["help"], ["--help"]):
+            print(render_help(active_theme(task_command()), CHAIN_HELP), end="")
+            return 0
+        options = parse_chain(arguments)
+        command = task_command()
+        result = subprocess.run(
+            [command, "rc.hooks=0", "rc.context=", "rc.json.array=on", "export"],
+            check=True, capture_output=True, text=True,
+        )
+        tasks = json.loads(result.stdout or "[]")
+        tasks = tasks if isinstance(tasks, list) else [tasks]
+        candidate, selected = chain_candidate(tasks, options)
+        warnings = validate_tasks(candidate)
+        plan = rock_plan(candidate, selected[-1])
+        warnings.extend(plan.get("warnings", []))
+        if warnings:
+            raise ValueError("; ".join(dict.fromkeys(warnings)))
+        print(render_chain_plan(candidate, selected, options), end="")
+        if not options["apply"]:
+            return 0
+        candidate_by_uuid = {str(task["uuid"]).lower(): task for task in candidate}
+        for uuid in selected[1:]:
+            modify_task(command, candidate_by_uuid[uuid], hooks=False)
+        modify_task(command, candidate_by_uuid[selected[0]], hooks=True)
+        print(f"APPLIED: {len(selected)} tasks; {task_label(candidate_by_uuid[selected[-1]])} is finish-line {options['finish']}.")
+        return 0
+    except Exception as exc:
+        print(f"Roll chain blocked: {exc}", file=sys.stderr)
+        return 1
 
 
 def milestone_kind(task: dict[str, Any]) -> str | None:
@@ -530,6 +742,8 @@ def rock(arguments: list[str]) -> int:
     if not arguments or arguments in (["help"], ["--help"]):
         print(render_help(active_theme(task_command()), ROCK_HELP), end="")
         return 0
+    if arguments[0] == "chain":
+        return chain(arguments[1:])
     command = task_command()
     try:
         result = subprocess.run(
@@ -560,7 +774,7 @@ def rock(arguments: list[str]) -> int:
         except Exception as exc:
             print(f"Rock --apply blocked: {exc}", file=sys.stderr)
             return 1
-    print("Usage: task rock help | task rock view | task rock show | task rock FINISH_ID [--apply]", file=sys.stderr)
+    print("Usage: task rock help | task rock view | task rock show | task rock FINISH_ID [--apply] | task rock chain FILE --start YYYY-MM-DD --finish YYYY-MM-DD --remaining 40m [--apply]", file=sys.stderr)
     return 2
 
 
@@ -591,6 +805,8 @@ def main(arguments: list[str]) -> int:
         return rock(arguments[1:])
     if arguments and arguments[-1] == "rock":
         return rock(arguments[:-1])
+    if arguments and arguments[0] == "chain":
+        return chain(arguments[1:])
     if not arguments or arguments in (["help"], ["--help"]):
         print(render_help(active_theme(task_command())), end="")
         return 0
@@ -598,7 +814,7 @@ def main(arguments: list[str]) -> int:
         return show()
     if arguments == ["validate"]:
         return validate()
-    print("Usage: task roll help | task roll show | task roll view | task roll validate", file=sys.stderr)
+    print("Usage: task roll help | task roll show | task roll view | task roll validate | task roll chain FILE --start YYYY-MM-DD --finish YYYY-MM-DD --remaining 40m [--apply]", file=sys.stderr)
     return 2
 
 

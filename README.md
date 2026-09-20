@@ -134,6 +134,17 @@ Show the field guide and copyable examples:
 task roll help
 ```
 
+Create a weekday Roll chain from selected `_zshuuids` output. This previews
+only; add `--apply` after checking the path:
+
+```sh
+task '/yv-/' _zshuuids | rg ':write yv-' > yv-chain.txt
+task roll chain yv-chain.txt --start 2026-09-22 --finish 2026-10-07 --remaining 40m
+```
+
+Use `task rock chain` with identical arguments when starting from the
+finish-line view; it uses the same validated builder.
+
 Show live links, offsets, checkpoints, and Rock deadlines:
 
 ```sh

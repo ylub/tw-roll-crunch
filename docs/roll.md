@@ -135,3 +135,28 @@ task FINISH_ID modify roll:PREDECESSOR_UUID roll_offset:2d roll_fixed:finish-lin
 
 After changing a predecessor's due date or completing it, run any Taskwarrior
 command normally. The `on-exit` hook recalculates affected rolling tasks.
+
+## Chain a selected list
+
+Use `task FILTER _zshuuids`, then use `rg` to select tasks in desired chain
+order. The saved text stays ordinary `UUID:description` lines; `.txt` and
+`.md` both work.
+
+```sh
+task '/yv-/' _zshuuids | rg ':write yv-' > yv-chain.txt
+task roll chain yv-chain.txt --start 2026-09-22 --finish 2026-10-07 --remaining 40m
+```
+
+`task rock chain` accepts the same command. It uses the same implementation:
+Roll writes the chain and Rock verifies its hard finish-line. There is no
+separate Rock scheduler to drift from Roll.
+
+Chain schedules one task on each weekday, preserves normal Taskwarrior
+`depends`, writes `remaining` as estimated work left, and makes the final task
+a hard `roll_fixed:finish-line`. It previews only. Review the printed Rock path,
+then rerun the same command with `--apply` to change tasks.
+
+The number of selected tasks must exactly match weekday slots from `--start`
+through `--finish`; Chain refuses to guess a schedule. The root waits until the
+start date. Existing final-task due time is preserved; absent a due time, Chain
+uses `16:00Z`.
