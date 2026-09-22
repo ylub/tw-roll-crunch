@@ -176,6 +176,16 @@ task TASK_ID modify roll_manual:yes roll_offset:P1D
 Roll still moves that task's due date from its predecessor. Clear the override
 with `task TASK_ID modify roll_manual:` to resume capacity auto-spacing.
 
+For a task that should appear once more after it is completed, use Phoenix:
+
+```sh
+task TASK_ID modify phoenix:PT90M
+```
+
+Completing `Laundry` creates one same-named `Laundry` task due 90 minutes
+later. The new task keeps project and tags, but not `phoenix`, Roll fields, or
+tracking session data.
+
 `task roll chain` creates a flexible chain. Use `task rock chain` with the
 same arguments when the final task must stay fixed at `--finish`.
 

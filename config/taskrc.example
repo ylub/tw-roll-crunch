@@ -36,6 +36,9 @@ uda.roll_offset.label=Roll Offset
 uda.roll_manual.type=string
 uda.roll_manual.label=Manual Roll Offset
 
+uda.phoenix.type=duration
+uda.phoenix.label=Phoenix
+
 uda.roll_fixed.type=string
 uda.roll_fixed.label=Finish-line Milestone
 

@@ -72,6 +72,20 @@ Clear the override with `task TASK_ID modify roll_manual:` to return to automati
 capacity spacing. When the predecessor completes and Roll releases the link, it
 also clears `roll_manual`.
 
+### `phoenix`
+
+Set a positive duration to create one new task with the same description when
+this task completes. The new task is due after the completion time. It keeps
+the project and tags, but does not inherit `phoenix`, Roll fields, or tracking
+session data.
+
+```sh
+task TASK_ID modify phoenix:PT90M
+```
+
+Completing `Laundry` with this field creates one new `Laundry` task due 90
+minutes later. This keeps one future task instead of a pre-made chain.
+
 ### `roll_fixed`
 
 Marks a due date as fixed instead of freely rolling it.

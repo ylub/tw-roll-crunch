@@ -25,6 +25,7 @@ Start here
   roll:<UUID>             child's predecessor
   roll_offset:<duration>  child's gap after predecessor
   roll_manual:yes         keep this offset instead of capacity auto-spacing
+  phoenix:<duration>      recreate this task once after completion
   roll_fixed:checkpoint   fixed intermediate date (not shown here)
   roll_fixed:finish-line  fixed Rock deadline (shown by task chain)
 
@@ -38,6 +39,9 @@ Link a task
 Keep a once-daily gap
   task CHILD modify roll_manual:yes roll_offset:P1D
   task CHILD modify roll_manual:
+
+Queue one same-name task after completion
+  task TASK_ID modify phoenix:PT90M
 
 Fix roll:P1D mistake
   task TASK_ID modify roll:
@@ -155,6 +159,7 @@ def render_help(
             "How Roll reads",
             "How Rock reads",
             "Link a task",
+            "Queue one same-name task after completion",
             "Fix roll:P1D mistake",
             "Limits",
         }:

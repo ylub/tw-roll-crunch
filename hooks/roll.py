@@ -320,6 +320,17 @@ def apply_modifications(command: str, uuid: str, modifications: list[str]) -> No
     )
 
 
+def create_phoenix_task(command: str, task: dict[str, Any], due: dt.datetime) -> None:
+    """Queue one same-description task after a completed Phoenix task."""
+    arguments = ["add", f"due:{format_task_date(due)}"]
+    if task.get("project"):
+        arguments.append(f"project:{task['project']}")
+    arguments.extend(f"+{tag}" for tag in task.get("tags", []) if isinstance(tag, str))
+    # `--` keeps a description such as "Call +Rivky" literal.
+    arguments.extend(("--", str(task["description"])))
+    task_run(command, *arguments)
+
+
 def main() -> int:
     input_data = sys.stdin.read()
     if not input_data.strip():
@@ -340,6 +351,27 @@ def main() -> int:
         changed_due_dates = 0
         changed_slack_values = 0
         released_links = 0
+        phoenix_created = 0
+
+        for uuid in changed_uuids:
+            task = by_uuid.get(uuid)
+            if (
+                task is None
+                or task.get("status") != "completed"
+                or task.get("end") != task.get("modified")
+                or not task.get("phoenix")
+            ):
+                continue
+            delay = parse_duration(task.get("phoenix"))
+            end = parse_task_date(task.get("end"))
+            if delay is None or delay <= dt.timedelta() or end is None or not task.get("description"):
+                warnings.append(f"Phoenix {uuid[:8]}: needs a positive duration and completed task data.")
+                continue
+            try:
+                create_phoenix_task(command, task, end + delay)
+                phoenix_created += 1
+            except Exception as exc:
+                warnings.append(f"Phoenix {uuid[:8]} creation failed: {exc}")
 
         for uuid, task in by_uuid.items():
             if invalid_milestone(task):
@@ -415,6 +447,11 @@ def main() -> int:
             updates.append(
                 f"{released_links} completed link"
                 f"{'s' if released_links != 1 else ''} released"
+            )
+        if phoenix_created:
+            updates.append(
+                f"{phoenix_created} Phoenix task"
+                f"{'s' if phoenix_created != 1 else ''} created"
             )
         if updates:
             print(f"Roll updated {' and '.join(updates)}.")

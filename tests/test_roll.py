@@ -154,6 +154,37 @@ class RollTests(unittest.TestCase):
                 "task", "B", ["due:20260103T120000Z", "roll:", "roll_offset:", "roll_manual:"]
             )
 
+    def test_phoenix_creates_one_same_task_after_completion(self):
+        tasks = [{
+            "uuid": "A", "status": "completed", "end": "20260102T120000Z",
+            "modified": "20260102T120000Z", "description": "Laundry",
+            "project": "home", "tags": ["errands", "home"], "phoenix": "PT90M",
+            "track_session": "must-not-copy",
+        }]
+        with patch("sys.stdin", io.StringIO(json.dumps({"uuid": "A"}))), patch.object(
+            roll, "task_command", return_value="task"
+        ), patch.object(roll, "export_tasks", return_value=tasks), patch.object(
+            roll, "task_run"
+        ) as task_run:
+            self.assertEqual(roll.main(), 0)
+        task_run.assert_called_once_with(
+            "task", "add", "due:20260102T133000Z", "project:home", "+errands",
+            "+home", "--", "Laundry"
+        )
+
+    def test_phoenix_ignores_completed_task_without_a_completion_event(self):
+        tasks = [{
+            "uuid": "A", "status": "completed", "end": "20260102T120000Z",
+            "modified": "20260102T120001Z", "description": "Laundry", "phoenix": "PT90M",
+        }]
+        with patch("sys.stdin", io.StringIO(json.dumps({"uuid": "A"}))), patch.object(
+            roll, "task_command", return_value="task"
+        ), patch.object(roll, "export_tasks", return_value=tasks), patch.object(
+            roll, "task_run"
+        ) as task_run:
+            self.assertEqual(roll.main(), 0)
+        task_run.assert_not_called()
+
     def test_roll_replaces_legacy_mark(self):
         tasks = [
             {"uuid": "A", "status": "pending", "due": "20260101T000000Z"},
