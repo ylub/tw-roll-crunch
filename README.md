@@ -10,6 +10,7 @@ Release notes: [CHANGELOG.md](CHANGELOG.md)
 - **Roll** moves dependent due dates when their predecessor moves or finishes.
 - **Crunch** reports scheduling pressure without changing task dates.
 - **Rock** plans backward through a Roll chain from a fixed finish-line deadline.
+- **Phoenix** creates one follow-up task after a task is completed.
 - Fixed checkpoints and finish-line milestones keep important dates stable.
 
 ## Requirements
@@ -125,8 +126,11 @@ Crunch uses `remaining` directly for easy-task and deadline pressure. It does
 not reduce that estimate by `progress`; `progress` only affects the start
 bonus. Adding or modifying a task recalculates its Crunch level.
 
-Changing `remaining` does not move due dates. Roll schedules from
-`roll_offset`, which is calendar spacing rather than estimated work.
+Run `task TASK_ID info` and look for the `Crunch` field: `LOW`, `MED`, `HIGH`,
+or `CRITICAL`. A task with no `remaining` estimate has no Crunch level.
+
+Changing `remaining` does not move a standalone task's due date. In a Roll
+chain with project capacity, it can change linked tasks' due dates; see below.
 
 See [docs/crunch.md](docs/crunch.md) for the complete scoring rules.
 
@@ -138,16 +142,22 @@ Show the field guide and copyable examples:
 task roll help
 ```
 
-Create a weekday Roll chain from selected `_zshuuids` output. This previews
-only; add `--apply` after checking the path:
+To chain existing tasks, select a project and save its `UUID:description` lines.
+Put the lines in the order you want the tasks to follow, then preview:
 
 ```sh
-task '/yv-/' _zshuuids | rg ':write yv-' > yv-chain.txt
-task roll chain yv-chain.txt --start 2026-09-22 --finish 2026-10-07 --remaining 40m
+task project:YOUR_PROJECT _zshuuids > chain.txt
+task roll chain chain.txt --start 2026-09-22 --finish 2026-10-07
 ```
 
-Omit `--remaining` when selected tasks already have different `remaining`
-estimates; Chain preserves them and lists every task without one.
+Replace `YOUR_PROJECT`, check the file order, and add `--apply` only after the
+preview looks right. Without `--remaining`, Chain preserves each task's
+estimate and lists tasks missing one. Use `--remaining 40m` only when every
+selected task should get that estimate.
+
+`--start` and `--finish` must be weekdays. Chain's initial dates use weekdays,
+but later Roll updates can place due dates on weekends; this is not a lasting
+weekday-only schedule.
 
 Set weekly capacity for a project in `~/.taskrc`; dotted child projects inherit
 their nearest parent value:
@@ -164,10 +174,18 @@ including Saturday and Sunday, minus the path's total `remaining` estimate.
 The `CAPACITY` column is a feasibility signal; it does not change `R_mark`.
 
 For every linked task with `remaining` and a matching capacity, Roll calculates
-its moving `roll_offset` as `remaining hours / weekly capacity * 7 days`.
+that task's moving `roll_offset` as `remaining hours / weekly capacity * 7 days`.
 Saturday and Sunday count. Roll rounds to 30-minute slots and refreshes the
-offset and downstream flexible dates after any task change. For a once-daily
-or otherwise intentional gap, preserve your own offset with:
+offset and downstream flexible dates after any task change.
+
+- Increase a linked task's `remaining`: its due date and later flexible dates
+  can move later.
+- Decrease it: those dates can move earlier. Small changes may round to the
+  same offset.
+- Earlier tasks do not move. Changing the root's `remaining` does not move its
+  due date.
+
+For a once-daily or otherwise intentional gap, preserve your own offset with:
 
 ```sh
 task TASK_ID modify roll_manual:yes roll_offset:P1D
@@ -175,6 +193,8 @@ task TASK_ID modify roll_manual:yes roll_offset:P1D
 
 Roll still moves that task's due date from its predecessor. Clear the override
 with `task TASK_ID modify roll_manual:` to resume capacity auto-spacing.
+
+#### Repeat once with Phoenix
 
 For a task that should appear once more after it is completed, use Phoenix:
 
@@ -186,8 +206,9 @@ Completing `Laundry` creates one same-named `Laundry` task due 90 minutes
 later. The new task keeps project and tags, but not `phoenix`, Roll fields, or
 tracking session data.
 
-`task roll chain` creates a flexible chain. Use `task rock chain` with the
-same arguments when the final task must stay fixed at `--finish`.
+`task roll chain` creates a flexible chain with no fixed finish-line. Its last
+task is a leaf whose due date can move; `--finish` sets only its initial date.
+Use `task rock chain` when the last task must stay fixed at `--finish`.
 
 Show numbered active Roll paths, then inspect one path:
 
@@ -197,9 +218,10 @@ task chain 2
 ```
 
 `task chain` shows root, task count, start, finish or leaf, deadline, capacity,
-and status. `task chain NUMBER` shows every task in that path. Capacity is `—`
-for flexible paths. `task chains view` remains the original compact chain
-summary without numbering or capacity.
+and status. On a flexible path, `DEADLINE` is the leaf's current rolling due
+date, not a fixed finish-line. `task chain NUMBER` shows every task in that
+path. Capacity is `—` for flexible paths. `task chains view` remains the
+original compact chain summary without numbering or capacity.
 
 Show flexible link details and offsets:
 
@@ -209,8 +231,8 @@ task roll show
 
 `task roll view` remains an alias for `task roll show`. The `R` column in either
 command shows only flexible Roll links:
-`󰍃 +GAP` means the task follows its predecessor by that moving gap. Fixed
-checkpoints and Rock finish-lines appear in their dedicated views instead.
+`󰍃 +GAP` means the task follows its predecessor by that moving gap. Use
+`task chain NUMBER` to see fixed checkpoints and finish-lines in the path.
 
 Point each rolling task at its predecessor and set the spacing with
 `roll_offset`:
@@ -224,12 +246,34 @@ task CHECKPOINT_ID modify roll:PREDECESSOR_UUID roll_offset:4d roll_fixed:checkp
 task FINISH_ID modify roll:PREDECESSOR_UUID roll_offset:2d roll_fixed:finish-line
 ```
 
-`checkpoint` preserves an intermediate date. `roll_fixed:finish-line` marks a
-fixed finish-line milestone. A chain can be pictured as:
+`checkpoint` preserves an intermediate date. An ordinary Roll chain ends at a
+flexible leaf, not a fixed finish-line:
 
 ```text
-A --2d--> B --4d--> C (checkpoint) --> D --> E (finish-line milestone)
+A --2d--> B --4d--> C (checkpoint) --> D --> E (flexible leaf)
 ```
+
+Set `roll_fixed:finish-line` on E only when E has a firm deadline for Rock.
+
+#### Pause a chain at a checkpoint
+
+Suppose task 38 is the first task you expect to finish after a break. Set its
+planned due date and checkpoint together:
+
+```sh
+task 38 modify due:2026-10-06 roll_fixed:checkpoint
+```
+
+Replace the ID and date with your task and planned completion date.
+
+- Changing `due` alone is not enough: Roll can recalculate a flexible task's
+  date from its predecessor.
+- Task 38 keeps the fixed date even if earlier tasks move. Tasks after 38 roll
+  from that date. If 38 will finish before the break, put the checkpoint on the
+  next task instead.
+- A checkpoint is not a Rock finish-line or an automatic no-work calendar.
+
+Check the date and `󰩈 checkpoint` marker with `task chain NUMBER`.
 
 Roll uses a predecessor's `due` time while it is active. On completion, it
 applies `end + roll_offset` once and releases the ordinary child from the Roll
@@ -238,9 +282,8 @@ and cycle handling.
 
 ### Rock
 
-Rock plans backward from a solid finish-line deadline. It never changes tasks:
-it shows the one root date that ordinary Roll should use to schedule the chain
-forward.
+Rock previews backward from a solid finish-line deadline by default. It shows
+the root date that ordinary Roll should use to schedule the chain forward.
 
 ```sh
 task rock FINISH_ID

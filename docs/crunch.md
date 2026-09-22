@@ -16,8 +16,9 @@ task TASK_ID modify remaining:18h progress:25
 ```
 
 `remaining` is the authoritative estimate. Crunch never derives it from
-`progress`. Roll also ignores it; changing rolling due dates requires
-`roll_offset`.
+`progress`. For a linked Roll task with project capacity, Roll uses that task's
+`remaining` to recalculate `roll_offset` and its downstream due dates. Without
+matching capacity, Roll keeps the existing offset.
 
 ## Formula
 

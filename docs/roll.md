@@ -27,11 +27,12 @@ date. Fixed milestones keep their links for slack calculation.
 For example:
 
 ```text
-A --2d--> B --4d--> C (checkpoint) --> D --> E (finish-line milestone)
+A --2d--> B --4d--> C (checkpoint) --> D --> E (flexible leaf)
 ```
 
 Here B follows A by two days, and C follows B by four days. C can hold an
-intermediate checkpoint; E can hold the chain's fixed finish-line milestone.
+intermediate checkpoint. E remains a flexible leaf unless you mark it as a
+fixed Rock finish-line.
 
 ## Fields
 
@@ -125,6 +126,9 @@ and `󰩈 checkpoint` marks a fixed checkpoint. It is output only; edit `roll`,
 A checkpoint is an intermediate boundary. Roll does not overwrite the
 checkpoint's due date. A downstream task uses that fixed due date as its
 ordinary predecessor base.
+Rock cannot plan backward through a checkpoint. If the path also has a fixed
+finish-line, `task rock FINISH_ID` reports that the checkpoint blocks its plan;
+inspect the downstream dates with `task chain NUMBER` instead.
 
 A finish-line (`roll_fixed:finish-line`) is the fixed milestone at the end of a
 chain. Roll keeps that due date stable and uses `roll_slack` to expose whether
@@ -196,18 +200,18 @@ command normally. The `on-exit` hook recalculates affected rolling tasks.
 
 ## Chain a selected list
 
-Use `task FILTER _zshuuids`, then use `rg` to select tasks in desired chain
-order. The saved text stays ordinary `UUID:description` lines; `.txt` and
-`.md` both work.
+Use `task FILTER _zshuuids` to save existing tasks, then put the
+`UUID:description` lines in the order you want. `.txt` and `.md` both work.
 
 ```sh
-task '/yv-/' _zshuuids | rg ':write yv-' > yv-chain.txt
-task roll chain yv-chain.txt --start 2026-09-22 --finish 2026-10-07 --remaining 40m
+task project:YOUR_PROJECT _zshuuids > chain.txt
+task roll chain chain.txt --start 2026-09-22 --finish 2026-10-07
 ```
 
-`task roll chain` makes a flexible Roll path: every date, including the last,
-can move. `task rock chain` accepts the same command but locks the last task at
-`--finish` as its hard finish-line.
+`task roll chain` makes a flexible Roll path with no fixed finish-line: every
+date, including the last, can move. Its `--finish` value is only the last
+task's initial date. `task rock chain` accepts the same command but locks the
+last task at `--finish` as its hard finish-line.
 
 Chain spreads tasks across the requested weekdays, preserves normal Taskwarrior
 `depends`, and writes `remaining` as estimated work left. It previews only.
@@ -219,10 +223,11 @@ task a hard `roll_fixed:finish-line`.
 to apply when any selected task has no estimate and lists all missing tasks.
 
 Several tasks may share a weekday when the list is longer than the available
-weekdays. Chain keeps the first task on `--start` and the finish-line on
-`--finish`. The root waits until the
-start date. Existing final-task due time is preserved; absent a due time, Chain
-uses `16:00Z`.
+weekdays. Chain places the first task on `--start` and the last task on
+`--finish`; only `task rock chain` fixes that last date as a finish-line. The
+root waits until the start date. Existing final-task due time is preserved;
+absent a due time, Chain uses `16:00Z`. Later Roll updates can move flexible
+due dates onto weekends.
 
 ## Chain browser
 

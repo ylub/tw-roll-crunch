@@ -26,15 +26,28 @@ Start here
   roll_offset:<duration>  child's gap after predecessor
   roll_manual:yes         keep this offset instead of capacity auto-spacing
   phoenix:<duration>      recreate this task once after completion
-  roll_fixed:checkpoint   fixed intermediate date (not shown here)
-  roll_fixed:finish-line  fixed Rock deadline (shown by task chain)
+  roll_fixed:checkpoint   fixed intermediate date (see task chain NUMBER)
+  roll_fixed:finish-line  fixed Rock deadline (see task chain NUMBER)
 
 How Roll reads
   CHILD stores both roll and roll_offset.
   43 --2d--> 44 means task 44 is due 2 days after task 43.
+  With project capacity, a child's remaining sets its rounded gap.
+  Changing it can move that child and later tasks, not earlier tasks.
+  The root's remaining does not move its due date.
+  On a flexible chain, task chain's DEADLINE is the leaf's moving due date.
+  A Roll-only chain ends at a flexible leaf, not a fixed finish-line.
 
 Link a task
   task CHILD modify roll:PREDECESSOR_UUID roll_offset:P1D
+
+Pause at a checkpoint
+  task TASK_ID modify due:YYYY-MM-DD roll_fixed:checkpoint
+  Choose the first task to finish after the break.
+  Set its planned due date and checkpoint together.
+  Changing due alone lets Roll recalculate it from the predecessor.
+  Its date stays fixed; later tasks roll from it. Earlier tasks do not move.
+  Check with task chain NUMBER. This does not block work during the break.
 
 Keep a once-daily gap
   task CHILD modify roll_manual:yes roll_offset:P1D
@@ -58,6 +71,10 @@ Start here
                          set root due date when plan is clean
   task rock chain ...     build and Rock-check a selected weekday chain
 
+Set a finish-line on an existing linked final task
+  task FINISH_ID modify due:YYYY-MM-DD roll_fixed:finish-line
+  The task also needs roll:<UUID> and roll_offset:<duration>.
+
 How Rock reads
   Rock starts at a finish-line due date and works backward through Roll gaps.
   It prints one root-date command. Roll then moves ordinary children forward.
@@ -70,18 +87,20 @@ Limits
 CHAIN_HELP = """Taskwarrior Roll + Rock — chain a selected list
 
 Input
-  task '/yv-/' _zshuuids | rg ':write yv-' > yv-chain.txt
-  task roll chain yv-chain.txt --start YYYY-MM-DD --finish YYYY-MM-DD [--remaining 40m]
+  task project:YOUR_PROJECT _zshuuids > chain.txt
+  task roll chain chain.txt --start YYYY-MM-DD --finish YYYY-MM-DD [--remaining 40m]
 
 How Chain reads
-  Input is one UUID:description line per task. Line order is chain order.
-  task roll chain makes a flexible Roll path.
+  Put the UUID:description lines in the order the tasks should follow.
+  task roll chain makes a flexible path with no fixed finish-line.
+  --finish sets the last task's initial date; that date can move.
   task rock chain makes final task a hard finish-line.
   --remaining sets every estimate. Omit it to preserve each task's estimate.
 
 Safety
   Preview is default. Add --apply only after preview shows right path.
   Start and finish must be weekdays. Multiple tasks may share a day.
+  Later Roll updates can move flexible due dates onto weekends.
 """
 
 HELP = ROLL_HELP
@@ -159,6 +178,9 @@ def render_help(
             "How Roll reads",
             "How Rock reads",
             "Link a task",
+            "Pause at a checkpoint",
+            "Keep a once-daily gap",
+            "Set a finish-line on an existing linked final task",
             "Queue one same-name task after completion",
             "Fix roll:P1D mistake",
             "Limits",
