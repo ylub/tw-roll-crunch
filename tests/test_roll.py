@@ -118,6 +118,42 @@ class RollTests(unittest.TestCase):
         due, _, _ = roll.calculate_schedule(tasks)
         self.assertEqual(due["B"], dt.datetime(2026, 1, 3, 19, tzinfo=UTC))
 
+    def test_roll_manual_keeps_explicit_offset_and_still_schedules(self):
+        tasks = [
+            {"uuid": "A", "status": "pending", "due": "20260101T000000Z"},
+            {
+                "uuid": "B", "status": "pending", "project": "posek.ch",
+                "remaining": "PT10H", "roll": "A", "roll_offset": "P1D",
+                "roll_manual": "yes",
+            },
+        ]
+        with patch.object(roll, "project_capacity") as capacity:
+            self.assertEqual(roll.refresh_offsets(tasks, "task"), {})
+            capacity.assert_not_called()
+        due, _, _ = roll.calculate_schedule(tasks)
+        self.assertEqual(due["B"], dt.datetime(2026, 1, 2, tzinfo=UTC))
+
+    def test_release_clears_roll_manual(self):
+        tasks = [
+            {
+                "uuid": "A", "status": "completed", "end": "20260102T120000Z",
+                "modified": "20260102T120000Z",
+            },
+            {
+                "uuid": "B", "status": "pending", "due": "20260110T000000Z",
+                "roll": "A", "roll_offset": "P1D", "roll_manual": "yes",
+            },
+        ]
+        with patch("sys.stdin", io.StringIO(json.dumps({"uuid": "A"}))), patch.object(
+            roll, "task_command", return_value="task"
+        ), patch.object(roll, "export_tasks", return_value=tasks), patch.object(
+            roll, "apply_modifications"
+        ) as modify:
+            self.assertEqual(roll.main(), 0)
+            modify.assert_called_once_with(
+                "task", "B", ["due:20260103T120000Z", "roll:", "roll_offset:", "roll_manual:"]
+            )
+
     def test_roll_replaces_legacy_mark(self):
         tasks = [
             {"uuid": "A", "status": "pending", "due": "20260101T000000Z"},
@@ -167,17 +203,17 @@ class RollTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("roll:<UUID>", result.stdout)
         self.assertIn("roll_offset:<duration>", result.stdout)
+        self.assertIn("roll_manual:yes", result.stdout)
         self.assertIn("Never use roll:P1D", result.stdout)
         self.assertIn("task chain NUMBER", result.stdout)
         self.assertIn("CHILD stores both roll and roll_offset", result.stdout)
         self.assertIn("44 is due 2 days after task 43", result.stdout)
 
-    def test_roll_view_directs_to_chain(self):
+    def test_roll_view_is_show_alias(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         main = roll_help["main"]
-        with patch("sys.stderr", new_callable=io.StringIO) as error:
-            self.assertEqual(main(["view"]), 2)
-        self.assertIn("task chain", error.getvalue())
+        with patch.dict(main.__globals__, {"show": lambda: 7}):
+            self.assertEqual(main(["view"]), 7)
 
     def test_task_rock_alias_suffix_routes_to_rock(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -236,7 +272,7 @@ class RollTests(unittest.TestCase):
         self.assertIn("IGNORED 43 Chapter", output)
         self.assertIn("roll_offset 2d needs roll:<UUID>", output)
 
-    def test_chain_lists_numbered_paths_and_capacity(self):
+    def test_chains_view_keeps_compact_paths(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         tasks = [
             {"id": 1, "uuid": "A", "status": "pending", "description": "Draft", "due": "20260922T160000Z"},
@@ -244,9 +280,9 @@ class RollTests(unittest.TestCase):
             {"id": 3, "uuid": "C", "status": "pending", "description": "Send", "due": "20260924T160000Z", "roll": "B", "roll_offset": "P1D", "roll_fixed": "finish-line"},
             {"id": 4, "uuid": "D", "status": "pending", "description": "Other", "due": "20260925T160000Z", "roll": "B", "roll_offset": "P2D"},
         ]
-        output = roll_help["render_chains"](tasks, capacities={})
-        self.assertIn("CHAIN — active Roll paths", output)
-        self.assertIn("task chain NUMBER", output)
+        output = roll_help["render_chains"](tasks)
+        self.assertIn("CHAINS — active Roll paths", output)
+        self.assertIn("Each row is one leaf path", output)
         self.assertIn("1 Draft", output)
         self.assertIn("3 Send", output)
         self.assertIn("4 Other", output)
@@ -261,6 +297,15 @@ class RollTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertIn("task chain [NUMBER]", result.stdout)
+
+    def test_task_chains_wrapper_keeps_view_alias(self):
+        result = subprocess.run(
+            ["sh", "task_chains", "--help"], cwd=Path(__file__).parent.parent,
+            env={**os.environ, "PATH": f"{Path(__file__).parent.parent}:{os.environ['PATH']}"},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("task chains view", result.stdout)
 
     def test_rock_plan_prints_one_root_change(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -318,13 +363,13 @@ class RollTests(unittest.TestCase):
         )
         self.assertEqual(slack, 10)
 
-    def test_chain_shows_capacity_and_path_details(self):
+    def test_chain_browser_shows_capacity_and_path_details(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         tasks = [
             {"id": 1, "uuid": "A", "status": "pending", "description": "Root", "remaining": "PT1H"},
             {"id": 2, "uuid": "B", "status": "pending", "description": "Finish", "project": "posek.ch", "remaining": "PT1H", "roll": "A", "roll_offset": "P1D", "roll_fixed": "finish-line", "due": "20260920T160000Z"},
         ]
-        output = roll_help["render_chains"](tasks, capacities={"posek.ch": 70})
+        output = roll_help["render_chain_browser"](tasks, capacities={"posek.ch": 70})
         self.assertIn("ROOT", output)
         self.assertIn("TASKS", output)
         self.assertIn("START", output)

@@ -90,6 +90,7 @@ mkdir -p "$HOME/.local/bin"
 install -m 0755 task_roll_help "$HOME/.local/bin/task_roll_help"
 install -m 0755 task_rock "$HOME/.local/bin/task_rock"
 install -m 0755 task_chain "$HOME/.local/bin/task_chain"
+install -m 0755 task_chains "$HOME/.local/bin/task_chains"
 ```
 
 Crunch only:
@@ -105,7 +106,7 @@ select another file. The supported `include` syntax is documented in the
 [Taskwarrior configuration guide](https://taskwarrior.org/docs/configuration/).
 
 To uninstall, remove the three installed hook paths,
-`$HOME/.local/bin/task_roll_help`, `$HOME/.local/bin/task_rock`, `$HOME/.local/bin/task_chain`, and the `include` line you added to your
+`$HOME/.local/bin/task_roll_help`, `$HOME/.local/bin/task_rock`, `$HOME/.local/bin/task_chain`, `$HOME/.local/bin/task_chains`, and the `include` line you added to your
 Taskwarrior config. Removing hooks does not delete task data.
 
 ## Usage
@@ -165,8 +166,15 @@ The `CAPACITY` column is a feasibility signal; it does not change `R_mark`.
 For every linked task with `remaining` and a matching capacity, Roll calculates
 its moving `roll_offset` as `remaining hours / weekly capacity * 7 days`.
 Saturday and Sunday count. Roll rounds to 30-minute slots and refreshes the
-offset and downstream flexible dates after any task change; do not enter a
-manual offset for those tasks.
+offset and downstream flexible dates after any task change. For a once-daily
+or otherwise intentional gap, preserve your own offset with:
+
+```sh
+task TASK_ID modify roll_manual:yes roll_offset:P1D
+```
+
+Roll still moves that task's due date from its predecessor. Clear the override
+with `task TASK_ID modify roll_manual:` to resume capacity auto-spacing.
 
 `task roll chain` creates a flexible chain. Use `task rock chain` with the
 same arguments when the final task must stay fixed at `--finish`.
@@ -180,7 +188,8 @@ task chain 2
 
 `task chain` shows root, task count, start, finish or leaf, deadline, capacity,
 and status. `task chain NUMBER` shows every task in that path. Capacity is `—`
-for flexible paths.
+for flexible paths. `task chains view` remains the original compact chain
+summary without numbering or capacity.
 
 Show flexible link details and offsets:
 
@@ -188,7 +197,8 @@ Show flexible link details and offsets:
 task roll show
 ```
 
-The `R` column in `task roll show` shows only flexible Roll links:
+`task roll view` remains an alias for `task roll show`. The `R` column in either
+command shows only flexible Roll links:
 `󰍃 +GAP` means the task follows its predecessor by that moving gap. Fixed
 checkpoints and Rock finish-lines appear in their dedicated views instead.
 

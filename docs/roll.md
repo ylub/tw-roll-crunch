@@ -58,6 +58,20 @@ Saturday and Sunday count. The value is rounded to a 30-minute slot and recalcul
 after task changes. Tasks without capacity or `remaining` keep their existing
 manual offset.
 
+### `roll_manual`
+
+Set `roll_manual:yes` to keep a linked task's `roll_offset` from being replaced
+by capacity auto-spacing. Roll still moves its due date from the predecessor,
+so this is the right choice for a once-daily task:
+
+```sh
+task TASK_ID modify roll_manual:yes roll_offset:P1D
+```
+
+Clear the override with `task TASK_ID modify roll_manual:` to return to automatic
+capacity spacing. When the predecessor completes and Roll releases the link, it
+also clears `roll_manual`.
+
 ### `roll_fixed`
 
 Marks a due date as fixed instead of freely rolling it.
@@ -204,4 +218,6 @@ status. Rock finish-lines show capacity; flexible paths show `—`. Branches
 appear as separate rows.
 
 Run `task chain NUMBER` to show every task in one path. Use `task roll show`
-only when you need the individual flexible Roll links and offsets.
+only when you need the individual flexible Roll links and offsets. `task chains
+view` remains the original compact summary, and `task roll view` remains an
+alias for `task roll show`.

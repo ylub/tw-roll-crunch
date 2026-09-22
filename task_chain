@@ -1,2 +1,2 @@
 #!/bin/sh
-exec task_roll_help chains "$@"
+exec task_roll_help browse "$@"

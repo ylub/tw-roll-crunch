@@ -28,9 +28,13 @@ uda.roll.label=Roll
 alias.roll=execute task_roll_help
 alias.rock=execute task_rock
 alias.chain=execute task_chain
+alias.chains=execute task_chains
 
 uda.roll_offset.type=duration
 uda.roll_offset.label=Roll Offset
+
+uda.roll_manual.type=string
+uda.roll_manual.label=Manual Roll Offset
 
 uda.roll_fixed.type=string
 uda.roll_fixed.label=Finish-line Milestone

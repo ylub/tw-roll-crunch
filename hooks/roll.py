@@ -161,7 +161,11 @@ def refresh_offsets(tasks: list[dict[str, Any]], command: str) -> dict[str, str]
     cache: dict[str, float | None] = {}
     changes: dict[str, str] = {}
     for task in tasks:
-        if task.get("status") not in ROLLABLE_STATUSES or not task.get("roll"):
+        if (
+            task.get("status") not in ROLLABLE_STATUSES
+            or not task.get("roll")
+            or str(task.get("roll_manual") or "").strip().lower() == "yes"
+        ):
             continue
         remaining = parse_duration(task.get("remaining"))
         capacity = project_capacity(command, task.get("project"), cache)
@@ -366,6 +370,8 @@ def main() -> int:
                 modifications.append(f"roll_offset:{offset_changes[uuid]}")
             if release:
                 modifications.extend(("roll:", "roll_offset:"))
+                if "roll_manual" in task:
+                    modifications.append("roll_manual:")
                 link_released = True
             if uuid in slack_hours:
                 try:
