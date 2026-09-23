@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import itertools
 import json
 import os
 import re
@@ -12,18 +13,26 @@ import subprocess
 import sys
 from typing import Any
 
+from roll_calendar import (
+    availability,
+    load_calendar,
+    long_breaks,
+    move_work,
+    work_between,
+)
+
 ROLL_HELP = """Taskwarrior Roll — live schedule
 
 Start here
   task roll show          show flexible Roll links
   task roll view          same as task roll show
   task roll validate      check links before relying on them
-  task roll chain ...     preview or apply a weekday chain from UUID:description input
+  task roll chain ...     preview or apply a selected chain from UUID:description input
   task chain              list numbered active Roll paths
   task chain NUMBER       show every task in one path
   task chains view        original compact chain summary
   roll:<UUID>             child's predecessor
-  roll_offset:<duration>  child's gap after predecessor
+  roll_offset:<duration>  child's gap after predecessor (available time with calendar)
   roll_manual:yes         keep this offset instead of capacity auto-spacing
   phoenix:<duration>      recreate this task once after completion
   roll_fixed:checkpoint   fixed intermediate date (see task chain NUMBER)
@@ -31,11 +40,20 @@ Start here
   roll_fixed:off          named checkpoint for time off
   roll_fixed:finish-line  fixed Rock deadline (see task chain NUMBER)
 
+Calendar (optional)
+  Copy config/calendar-5787.taskrc to your own calendar file.
+  Add include /absolute/path/to/your-calendar.taskrc to ~/.taskrc once.
+  roll.calendar.DATE=0 marks a day off; 0.5 ends work at 12:00 local time.
+  roll.calendar.START..END=0 marks an inclusive range. Use 1 to override a day off.
+
 How Roll reads
   CHILD stores both roll and roll_offset.
-  43 --2d--> 44 means task 44 is due 2 days after task 43.
-  With project capacity, a child's remaining sets its rounded gap.
-  Changing it can move that child and later tasks, not earlier tasks.
+  43 --2d--> 44 means task 44 follows task 43 by a two-day gap.
+  With a calendar, the gap counts available time; otherwise it is elapsed time.
+  With project capacity, a child's remaining sets its rounded work gap.
+  Changing remaining can move that child and later tasks, not earlier tasks.
+  An included calendar makes Sunday-Friday available and skips Saturday.
+  Roll gives a subtle calendar notice when linked due dates cross explicit time off.
   The root's remaining does not move its due date.
   On a flexible chain, task chain's DEADLINE is the leaf's moving due date.
   A Roll-only chain ends at a flexible leaf, not a fixed finish-line.
@@ -71,7 +89,8 @@ Start here
   task rock FINISH_ID     show one start-date plan
   task rock FINISH_ID --apply
                          set root due date when plan is clean
-  task rock chain ...     build and Rock-check a selected weekday chain
+  task rock chain ...     build and Rock-check a selected chain
+  task rock view          show live Roll links and calendar breaks
 
 Set a finish-line on an existing linked final task
   task FINISH_ID modify due:YYYY-MM-DD roll_fixed:finish-line
@@ -86,6 +105,8 @@ Fixed dates
   roll_fixed:vacation     same boundary, marked for vacation
   roll_fixed:off          same boundary, marked for time off
   roll_fixed:finish-line  fixed deadline; starts Rock here
+  An included roll.calendar file skips days off; the deadline may be on a day off.
+  task rock view shows breaks longer than one day, omitting routine Saturdays.
 
 Limits
   Rock previews by default. --apply refuses warnings.
@@ -98,6 +119,7 @@ CHAIN_HELP = """Taskwarrior Roll + Rock — chain a selected list
 Input
   task project:YOUR_PROJECT _zshuuids > chain.txt
   task roll chain chain.txt --start YYYY-MM-DD --finish YYYY-MM-DD [--remaining 40m]
+  task rock chain chain.txt --start YYYY-MM-DD --finish YYYY-MM-DD [--remaining 40m]
 
 How Chain reads
   Put the UUID:description lines in the order the tasks should follow.
@@ -108,8 +130,11 @@ How Chain reads
 
 Safety
   Preview is default. Add --apply only after preview shows right path.
-  Start and finish must be weekdays. Multiple tasks may share a day.
-  Later Roll updates can move flexible due dates onto weekends.
+  Without a calendar, start and finish must be weekdays.
+  With a calendar, --start must be available. Sunday is available by default;
+  Saturday is off. Flexible half-day due times end by 12:00 local time.
+  task chain NUMBER shows breaks longer than one day.
+  Rock's fixed finish-line may fall on a day off. Multiple tasks may share a day.
 """
 
 HELP = ROLL_HELP
@@ -279,17 +304,36 @@ def format_duration(value: dt.timedelta) -> str:
     return f"P{date_part}T{time_part}"
 
 
-def weekday_dates(start: dt.date, finish: dt.date, count: int) -> list[dt.date]:
-    if start.weekday() > 4 or finish.weekday() > 4:
+def weekday_dates(
+    start: dt.date, finish: dt.date, count: int,
+    calendar: dict[dt.date, float] | None = None, hard_finish: bool = False,
+) -> list[dt.date]:
+    if calendar is None and (start.weekday() > 4 or finish.weekday() > 4):
         raise ValueError("Start and finish must both be weekdays.")
+    if calendar is not None and (not availability(calendar, start) or (not hard_finish and not availability(calendar, finish))):
+        raise ValueError("Start and flexible finish must be available work dates.")
     dates: list[dt.date] = []
     current = start
     while current <= finish:
-        if current.weekday() < 5:
+        if (calendar is None and current.weekday() < 5) or (calendar is not None and availability(calendar, current)):
             dates.append(current)
         current += dt.timedelta(days=1)
     if count < 2:
         raise ValueError("Chain needs at least two tasks.")
+    if calendar is not None:
+        if not dates:
+            raise ValueError("No available dates in chain range.")
+        weights = [availability(calendar, day) for day in dates]
+        total = sum(weights)
+        cumulative = []
+        running = 0.0
+        for weight in weights:
+            running += weight
+            cumulative.append(running)
+        chosen = [dates[min(range(len(dates)), key=lambda pos: abs(cumulative[pos] - total * index / (count - 1)))] for index in range(count)]
+        chosen[0] = start
+        chosen[-1] = finish
+        return chosen
     # Spread the ordered list over the requested range.  Repeated dates are
     # intentional: a Roll link with P0D is how several small tasks share a day.
     return [dates[round(index * (len(dates) - 1) / (count - 1))] for index in range(count)]
@@ -361,9 +405,10 @@ def parse_chain(arguments: list[str]) -> dict[str, Any]:
 
 def chain_candidate(
     tasks: list[dict[str, Any]], options: dict[str, Any], hard_finish: bool = False,
+    calendar: dict[dt.date, float] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     selected = read_chain(options["file"])
-    dates = weekday_dates(options["start"], options["finish"], len(selected))
+    dates = weekday_dates(options["start"], options["finish"], len(selected), calendar, hard_finish)
     by_uuid = {str(task.get("uuid", "")).lower(): task for task in tasks}
     missing = [uuid for uuid in selected if uuid not in by_uuid]
     if missing:
@@ -381,11 +426,19 @@ def chain_candidate(
     candidate_by_uuid = {str(task.get("uuid", "")).lower(): task for task in candidate}
     final_due = parse_date(candidate_by_uuid[selected[-1]].get("due"))
     due_time = final_due.strftime("%H%M%SZ") if final_due else "160000Z"
+    local_time = final_due.astimezone().time().replace(tzinfo=None) if final_due else dt.time(16)
     for index, uuid in enumerate(selected):
         task = candidate_by_uuid[uuid]
         if options.get("remaining"):
             task["remaining"] = options["remaining"]
-        task["due"] = dates[index].strftime("%Y%m%dT") + due_time
+        scheduled_time = local_time
+        if (calendar is not None and availability(calendar, dates[index]) == 0.5
+                and not (hard_finish and index == len(selected) - 1)):
+            scheduled_time = min(local_time, dt.time(12))
+        task["due"] = (
+            dt.datetime.combine(dates[index], scheduled_time).astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            if calendar is not None else dates[index].strftime("%Y%m%dT") + due_time
+        )
         task.pop("roll_slack", None)
         if index == 0:
             task.pop("roll", None)
@@ -394,8 +447,11 @@ def chain_candidate(
             task["wait"] = dates[index].isoformat()
             continue
         task["roll"] = selected[index - 1]
-        gap = dates[index] - dates[index - 1]
-        task["roll_offset"] = f"P{gap.days}D"
+        if calendar is None:
+            gap = dates[index] - dates[index - 1]
+        else:
+            gap = work_between(parse_date(candidate_by_uuid[selected[index - 1]]["due"]), parse_date(task["due"]), calendar)
+        task["roll_offset"] = format_duration(gap) if gap > dt.timedelta() else "P0D"
         if hard_finish and index == len(selected) - 1:
             task["roll_fixed"] = "finish-line"
         else:
@@ -405,15 +461,17 @@ def chain_candidate(
 
 def render_chain_plan(
     candidate: list[dict[str, Any]], selected: list[str], options: dict[str, Any], hard_finish: bool,
+    calendar: dict[dt.date, float] | None = None,
 ) -> str:
     body = (
-        render_rock_plan(rock_plan(candidate, selected[-1])).rstrip()
-        if hard_finish else render_rolls(candidate).rstrip()
+        render_rock_plan(rock_plan(candidate, selected[-1], calendar), calendar).rstrip()
+        if hard_finish else render_rolls(candidate, calendar=calendar).rstrip()
     )
     lines = [
         "CHAIN — selected Roll schedule",
         "",
-        f"Tasks: {len(selected)}  Remaining: {options.get('remaining', 'preserve each')}  Weekdays only",
+        (f"Tasks: {len(selected)}  Remaining: {options.get('remaining', 'preserve each')}  "
+         f"{'Available dates' if calendar is not None else 'Weekdays only'}"),
         body,
     ]
     if not options["apply"]:
@@ -445,14 +503,15 @@ def chain(arguments: list[str], hard_finish: bool = False) -> int:
         )
         tasks = json.loads(result.stdout or "[]")
         tasks = tasks if isinstance(tasks, list) else [tasks]
-        candidate, selected = chain_candidate(tasks, options, hard_finish)
+        calendar = load_calendar(command)
+        candidate, selected = chain_candidate(tasks, options, hard_finish, calendar)
         candidate_by_uuid = {str(task["uuid"]).lower(): task for task in candidate}
         warnings = validate_tasks([candidate_by_uuid[uuid] for uuid in selected])
         if hard_finish:
-            warnings.extend(rock_plan(candidate, selected[-1]).get("warnings", []))
+            warnings.extend(rock_plan(candidate, selected[-1], calendar).get("warnings", []))
         if warnings:
             raise ValueError("; ".join(dict.fromkeys(warnings)))
-        print(render_chain_plan(candidate, selected, options, hard_finish), end="")
+        print(render_chain_plan(candidate, selected, options, hard_finish, calendar), end="")
         if not options["apply"]:
             return 0
         for uuid in selected[1:]:
@@ -545,6 +604,7 @@ def capacity_map(command: str, tasks: list[dict[str, Any]]) -> dict[str, float |
 
 def weekday_capacity_slack(
     plan: dict[str, Any], weekly_hours: float | None, now: dt.datetime | None = None,
+    calendar: dict[dt.date, float] | None = None,
 ) -> float | None:
     """Daily work capacity from today through the finish-line, minus remaining work."""
     if weekly_hours is None or not plan.get("root"):
@@ -558,12 +618,19 @@ def weekday_capacity_slack(
         if duration is None:
             return None
         remaining.append(duration.total_seconds() / 3600)
-    today = (now or dt.datetime.now(dt.timezone.utc)).date()
-    days = (deadline.date() - today).days + 1 if deadline.date() >= today else 0
-    return days * weekly_hours / 7 - sum(remaining)
+    today = (now or dt.datetime.now(dt.timezone.utc)).astimezone().date() if calendar is not None else (now or dt.datetime.now(dt.timezone.utc)).date()
+    last = deadline.astimezone().date() if calendar is not None else deadline.date()
+    days = (last - today).days + 1 if last >= today else 0
+    if calendar is None:
+        return days * weekly_hours / 7 - sum(remaining)
+    available = sum(availability(calendar, today + dt.timedelta(days=index)) for index in range(days))
+    return available * weekly_hours / 6 - sum(remaining)
 
 
-def rock_plan(tasks: list[dict[str, Any]], selector: str) -> dict[str, Any]:
+def rock_plan(
+    tasks: list[dict[str, Any]], selector: str,
+    calendar: dict[dt.date, float] | None = None,
+) -> dict[str, Any]:
     by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
     finish = find_task(tasks, selector)
     warnings: list[str] = []
@@ -597,7 +664,7 @@ def rock_plan(tasks: list[dict[str, Any]], selector: str) -> dict[str, Any]:
         if predecessor.get("status") not in {"pending", "waiting"}:
             warnings.append(f"{task_label(predecessor)} is completed or inactive.")
             break
-        required -= offset
+        required = move_work(required, -offset, calendar) if calendar is not None else required - offset
         kind = milestone_kind(predecessor)
         if kind in {"checkpoint", "vacation", "off"}:
             checkpoint_due = parse_date(predecessor.get("due"))
@@ -643,7 +710,9 @@ def rock_status(plan: dict[str, Any]) -> str:
     return "READY" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
 
 
-def render_rock_plan(plan: dict[str, Any]) -> str:
+def render_rock_plan(
+    plan: dict[str, Any], calendar: dict[dt.date, float] | None = None,
+) -> str:
     if not plan.get("root"):
         if plan.get("boundary"):
             return ("ROCK — plan from a solid deadline\n\n"
@@ -658,13 +727,19 @@ def render_rock_plan(plan: dict[str, Any]) -> str:
     lines = [
         "ROCK — plan from a solid deadline",
         "",
-        f"Deadline: {parse_date(finish.get('due')).date()}  {task_label(finish)}",
-        f"Start needed: {start.date()}  {task_label(root)}",
+        f"Deadline: {(parse_date(finish.get('due')).astimezone() if calendar is not None else parse_date(finish.get('due'))).date()}  {task_label(finish)}",
+        f"Start needed: {(start.astimezone() if calendar is not None else start).date()}  {task_label(root)}",
         f"Path: {path}",
         "",
         "DRY RUN — apply this one anchor change:",
         f"task {root['uuid']} modify due:{start.strftime('%Y%m%dT%H%M%SZ')}",
     ]
+    if calendar is not None:
+        breaks = [
+            item for (_, later), (_, earlier) in zip(plan["path"], plan["path"][1:])
+            for item in long_breaks(earlier, later, calendar)
+        ]
+        lines.extend(f"Calendar break: {item}" for item in dict.fromkeys(breaks))
     lines.extend(f"WARN: {warning}" for warning in plan["warnings"])
     return "\n".join(lines) + "\n"
 
@@ -686,7 +761,10 @@ def apply_rock_plan(plan: dict[str, Any], command: str) -> None:
     )
 
 
-def render_rolls(tasks: list[dict[str, Any]], theme: dict[str, str] | None = None) -> str:
+def render_rolls(
+    tasks: list[dict[str, Any]], theme: dict[str, str] | None = None,
+    calendar: dict[dt.date, float] | None = None,
+) -> str:
     theme = theme or {}
     by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
     active = {
@@ -724,18 +802,21 @@ def render_rolls(tasks: list[dict[str, Any]], theme: dict[str, str] | None = Non
                 target_id,
                 target,
                 r_mark_for(task) or task.get("r_mark") or "—",
+                long_breaks(parse_date(predecessor.get("due")), parse_date(task.get("due")), calendar)
+                if calendar is not None and predecessor and parse_date(predecessor.get("due")) and parse_date(task.get("due")) else [],
             )
         )
     if rows:
-        header = f'{"PREDECESSOR":<24}  {"GAP":<8}  {"CHILD":<24}  R'
+        header = f'{"PREDECESSOR":<24}  {"WORK GAP" if calendar is not None else "GAP":<8}  {"CHILD":<24}  R'
         lines = [
             "ROLL — live schedule",
             "",
-            "Each row means: CHILD is due GAP after PREDECESSOR.",
+            ("Each row means: CHILD follows PREDECESSOR by an available-time WORK GAP."
+             if calendar is not None else "Each row means: CHILD is due GAP after PREDECESSOR."),
             "",
             paint(header, theme.get("header", "")),
         ]
-        for _, source, source_color_id, offset, target_id, target, marker in sorted(rows):
+        for _, source, source_color_id, offset, target_id, target, marker, breaks in sorted(rows):
             source = source[:24]
             source_length = len(source)
             if source_color_id:
@@ -749,6 +830,7 @@ def render_rolls(tasks: list[dict[str, Any]], theme: dict[str, str] | None = Non
                 + " " * (24 - len(target))
             )
             marker = paint(marker, theme.get("warning", "")) if marker.endswith(("checkpoint", "vacation", "off", "finish-line")) else marker
+            lines.extend(f"  Calendar break: {item}" for item in breaks)
             lines.append(f"{source[:24]:<24}  {offset}  {target}  {marker}")
     else:
         lines = ["No active Roll links or milestones."]
@@ -846,6 +928,7 @@ def sorted_chain_paths(tasks: list[dict[str, Any]]) -> list[list[dict[str, Any]]
 def render_chain_browser(
     tasks: list[dict[str, Any]], theme: dict[str, str] | None = None,
     capacities: dict[str, float | None] | None = None,
+    calendar: dict[dt.date, float] | None = None, show_breaks: bool = False,
 ) -> str:
     theme = theme or {}
     capacities = capacities or {}
@@ -871,9 +954,9 @@ def render_chain_browser(
         start = parse_date(root.get("due"))
         deadline = parse_date(leaf.get("due"))
         if milestone_kind(leaf) == "finish-line":
-            plan = rock_plan(tasks, str(leaf.get("uuid")))
+            plan = rock_plan(tasks, str(leaf.get("uuid")), calendar)
             status = rock_status(plan)
-            slack = weekday_capacity_slack(plan, capacities.get(str(leaf.get("project") or "")))
+            slack = weekday_capacity_slack(plan, capacities.get(str(leaf.get("project") or "")), calendar=calendar)
             capacity = f"{slack:+g}h" if slack is not None else "—"
         else:
             status = "ROLLING"
@@ -886,10 +969,18 @@ def render_chain_browser(
             f"{leaf_colored}{' ' * (24 - len(leaf_label))}  "
             f"{str(deadline.date()) if deadline else '—':<10}  {capacity:>9}  {status}"
         )
+        if show_breaks and calendar is not None:
+            for predecessor, child in itertools.pairwise(path):
+                before, after = parse_date(predecessor.get("due")), parse_date(child.get("due"))
+                if before and after:
+                    lines.extend(f"    Calendar break: {item}" for item in long_breaks(before, after, calendar))
     return "\n".join(lines) + "\n"
 
 
-def render_chains(tasks: list[dict[str, Any]], theme: dict[str, str] | None = None) -> str:
+def render_chains(
+    tasks: list[dict[str, Any]], theme: dict[str, str] | None = None,
+    calendar: dict[dt.date, float] | None = None,
+) -> str:
     theme = theme or {}
     paths = sorted_chain_paths(tasks)
     if not paths:
@@ -913,7 +1004,7 @@ def render_chains(tasks: list[dict[str, Any]], theme: dict[str, str] | None = No
         start = parse_date(root.get("due"))
         deadline = parse_date(leaf.get("due"))
         if milestone_kind(leaf) == "finish-line":
-            plan = rock_plan(tasks, str(leaf.get("uuid")))
+            plan = rock_plan(tasks, str(leaf.get("uuid")), calendar)
             status = rock_status(plan)
         else:
             status = "ROLLING"
@@ -931,6 +1022,7 @@ def render_chains(tasks: list[dict[str, Any]], theme: dict[str, str] | None = No
 def render_chain_details(
     tasks: list[dict[str, Any]], number: int, theme: dict[str, str] | None = None,
     capacities: dict[str, float | None] | None = None,
+    calendar: dict[dt.date, float] | None = None,
 ) -> str:
     paths = sorted_chain_paths(tasks)
     if number < 1 or number > len(paths):
@@ -942,22 +1034,27 @@ def render_chain_details(
     lines = [
         f"CHAIN {number} — {task_label(root)} to {task_label(leaf)}",
         "",
-        paint(f'{"ID":>4}  {"TASK":<28}  {"STATUS":<8}  {"DUE":<16}  {"REMAINING":<10}  {"GAP":<8}  R', theme.get("header", "")),
+        paint(f'{"ID":>4}  {"TASK":<28}  {"STATUS":<8}  {("DUE (LOCAL)" if calendar is not None else "DUE"):<16}  {"REMAINING":<10}  {("WORK GAP" if calendar is not None else "GAP")!s:<8}  R', theme.get("header", "")),
     ]
-    for task in path:
+    for index, task in enumerate(path):
         task_id = str(task.get("id") or task.get("uuid", "")[:8])
         label = task_label(task)[len(task_id):].strip()[:28]
         due = parse_date(task.get("due"))
         marker = task.get("r_mark") or r_mark_for(task) or "—"
         task_id = paint(f"{task_id:>4}", theme.get("child", ""))
+        if calendar is not None and index:
+            predecessor = path[index - 1]
+            before = parse_date(predecessor.get("due"))
+            if before and due:
+                lines.extend(f"      Calendar break: {item}" for item in long_breaks(before, due, calendar))
         lines.append(
             f"{task_id}  {label:<28}  {str(task.get('status') or '—'):<8}  "
-            f"{due.strftime('%Y-%m-%d %H:%M') if due else '—':<16}  {short_duration(task.get('remaining')):<10}  "
+            f"{(due.astimezone() if calendar is not None else due).strftime('%Y-%m-%d %H:%M') if due else '—':<16}  {short_duration(task.get('remaining')):<10}  "
             f"{short_duration(task.get('roll_offset')):<8}  {marker}"
         )
     if milestone_kind(leaf) == "finish-line":
-        plan = rock_plan(tasks, str(leaf.get("uuid")))
-        slack = weekday_capacity_slack(plan, capacities.get(str(leaf.get("project") or "")))
+        plan = rock_plan(tasks, str(leaf.get("uuid")), calendar)
+        slack = weekday_capacity_slack(plan, capacities.get(str(leaf.get("project") or "")), calendar=calendar)
         capacity = f"{slack:+g}h" if slack is not None else "—"
         deadline = parse_date(leaf.get("due"))
         status = rock_status(plan)
@@ -980,7 +1077,7 @@ def show() -> int:
         )
         tasks = json.loads(result.stdout or "[]")
         print(
-            render_rolls(tasks if isinstance(tasks, list) else [tasks], active_theme(command)),
+            render_rolls(tasks if isinstance(tasks, list) else [tasks], active_theme(command), load_calendar(command)),
             end="",
         )
         return 0
@@ -991,7 +1088,7 @@ def show() -> int:
 
 def browser(arguments: list[str]) -> int:
     if arguments in (["help"], ["--help"]):
-        print("Usage: task chain [NUMBER]")
+        print("task chain lists active Roll paths. task chain NUMBER shows tasks, capacity, and calendar breaks over one day.")
         return 0
     if len(arguments) > 1 or (arguments and not arguments[0].isdigit()):
         print("Usage: task chain [NUMBER]", file=sys.stderr)
@@ -1006,10 +1103,11 @@ def browser(arguments: list[str]) -> int:
         tasks = tasks if isinstance(tasks, list) else [tasks]
         theme = active_theme(command)
         capacities = capacity_map(command, tasks)
+        calendar = load_calendar(command)
         if arguments:
-            print(render_chain_details(tasks, int(arguments[0]), theme, capacities), end="")
+            print(render_chain_details(tasks, int(arguments[0]), theme, capacities, calendar), end="")
         else:
-            print(render_chain_browser(tasks, theme, capacities), end="")
+            print(render_chain_browser(tasks, theme, capacities, calendar), end="")
         return 0
     except Exception as exc:
         print(f"Chain failed: {exc}", file=sys.stderr)
@@ -1030,7 +1128,7 @@ def chains(arguments: list[str]) -> int:
             check=True, capture_output=True, text=True,
         )
         tasks = json.loads(result.stdout or "[]")
-        print(render_chains(tasks if isinstance(tasks, list) else [tasks], active_theme(command)), end="")
+        print(render_chains(tasks if isinstance(tasks, list) else [tasks], active_theme(command), load_calendar(command)), end="")
         return 0
     except Exception as exc:
         print(f"Chains view failed: {exc}", file=sys.stderr)
@@ -1056,14 +1154,19 @@ def rock(arguments: list[str]) -> int:
     except Exception as exc:
         print(f"Rock failed: {exc}", file=sys.stderr)
         return 1
+    try:
+        calendar = load_calendar(command)
+    except Exception as exc:
+        print(f"Rock failed: {exc}", file=sys.stderr)
+        return 1
     if arguments in (["view"], ["show"]):
-        print(render_chain_browser(tasks, active_theme(command), capacity_map(command, tasks)), end="")
+        print(render_chain_browser(tasks, active_theme(command), capacity_map(command, tasks), calendar, True), end="")
         return 0
     apply = "--apply" in arguments
     selectors = [argument for argument in arguments if argument != "--apply"]
     if len(selectors) == 1 and len(selectors) + int(apply) == len(arguments):
-        plan = rock_plan(tasks, selectors[0])
-        print(render_rock_plan(plan), end="")
+        plan = rock_plan(tasks, selectors[0], calendar)
+        print(render_rock_plan(plan, calendar), end="")
         if not apply:
             return 0
         try:

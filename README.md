@@ -87,8 +87,10 @@ Roll only:
 
 ```sh
 install -m 0755 hooks/roll.py "$HOOK_DIR/on-exit-roll.py"
+install -m 0644 roll_calendar.py "${TASKDATA:-$HOME/.task}/roll_calendar.py"
 mkdir -p "$HOME/.local/bin"
 install -m 0755 task_roll_help "$HOME/.local/bin/task_roll_help"
+install -m 0644 roll_calendar.py "$HOME/.local/bin/roll_calendar.py"
 install -m 0755 task_rock "$HOME/.local/bin/task_rock"
 install -m 0755 task_chain "$HOME/.local/bin/task_chain"
 install -m 0755 task_chains "$HOME/.local/bin/task_chains"
@@ -106,9 +108,16 @@ main installation steps. Taskwarrior normally uses `~/.taskrc`; `TASKRC` can
 select another file. The supported `include` syntax is documented in the
 [Taskwarrior configuration guide](https://taskwarrior.org/docs/configuration/).
 
-To uninstall, remove the three installed hook paths,
-`$HOME/.local/bin/task_roll_help`, `$HOME/.local/bin/task_rock`, `$HOME/.local/bin/task_chain`, `$HOME/.local/bin/task_chains`, and the `include` line you added to your
+To uninstall, remove the three installed hook paths, the two installed
+`roll_calendar.py` copies, `$HOME/.local/bin/task_roll_help`,
+`$HOME/.local/bin/task_rock`, `$HOME/.local/bin/task_chain`,
+`$HOME/.local/bin/task_chains`, and the `include` line you added to your
 Taskwarrior config. Removing hooks does not delete task data.
+
+For an existing installation, `install.sh` refuses to overwrite its files.
+Back up the installed Roll hook and commands outside the hooks directory,
+then use the manual Roll install commands above to replace them. Leave your
+personal calendar file in place.
 
 ## Usage
 
@@ -155,9 +164,8 @@ preview looks right. Without `--remaining`, Chain preserves each task's
 estimate and lists tasks missing one. Use `--remaining 40m` only when every
 selected task should get that estimate.
 
-`--start` and `--finish` must be weekdays. Chain's initial dates use weekdays,
-but later Roll updates can place due dates on weekends; this is not a lasting
-weekday-only schedule.
+Without a calendar, `--start` and `--finish` must be weekdays. Chain's initial
+dates use weekdays, but later Roll updates can place due dates on weekends.
 
 Set weekly capacity for a project in `~/.taskrc`; dotted child projects inherit
 their nearest parent value:
@@ -168,14 +176,16 @@ roll.capacity.other-project=12
 ```
 
 `task chain` adds `CAPACITY` for each Rock finish-line path. It is the
-available project hours from today through its deadline,
-including Saturday and Sunday, minus the path's total `remaining` estimate.
+available project hours from today through its deadline, minus the path's total
+`remaining` estimate. Without a calendar, Saturday and Sunday count.
 `—` means the project has no capacity setting or a path task lacks `remaining`.
 The `CAPACITY` column is a feasibility signal; it does not change `R_mark`.
 
-For every linked task with `remaining` and a matching capacity, Roll calculates
-that task's moving `roll_offset` as `remaining hours / weekly capacity * 7 days`.
-Saturday and Sunday count. Roll rounds to 30-minute slots and refreshes the
+Without a calendar, for every linked task with `remaining` and a matching
+capacity, Roll calculates that task's moving `roll_offset` as
+`remaining hours / weekly capacity * 7 days`. With a calendar, it uses six
+available days per week.
+Roll rounds to 30-minute slots and refreshes the
 offset and downstream flexible dates after any task change.
 
 - Increase a linked task's `remaining`: its due date and later flexible dates
@@ -184,6 +194,52 @@ offset and downstream flexible dates after any task change.
   same offset.
 - Earlier tasks do not move. Changing the root's `remaining` does not move its
   due date.
+
+#### Days off and half days
+
+From this repository, copy [the 5787 Diaspora calendar](config/calendar-5787.taskrc)
+to a personal file:
+
+```sh
+cp -i config/calendar-5787.taskrc "${TASKDATA:-$HOME/.task}/roll-calendar.taskrc"
+```
+
+Then add this line **once** to your Taskwarrior configuration (`${TASKRC:-$HOME/.taskrc}`),
+using the full path to your copy:
+
+```ini
+include /absolute/path/to/roll-calendar.taskrc
+```
+
+The copy is yours to edit; upgrades do not replace it. The example marks Yom
+Tov and Tisha B'Av off, and Erev Yom Tov at half capacity. Add vacation dates
+in the same file:
+
+```ini
+roll.calendar.2026-12-20..2026-12-27=0
+roll.calendar.2027-01-05=0.5
+```
+
+Ranges include both endpoints. Values are `0` (off), `0.5` (available until
+12:00:00 local time), and `1` (available all day). Conflicting or invalid
+entries block calendar scheduling until fixed. Dates use your computer's local
+timezone. Once the calendar is
+included, Sunday through Friday are available by default and Saturday is off;
+an explicit entry can override Saturday. Weekly project hours are spread over
+six normal workdays. `roll_offset:P1D` then means one available day, including
+when `roll_manual:yes` keeps that amount fixed. Chain's initial flexible due
+times on half days end by 12:00 local time.
+
+Roll updates existing flexible chain dates on the next Taskwarrior run, even if
+you only changed the calendar file. Rock, Chain, and `CAPACITY` use
+the same calendar. A Rock finish-line may stay fixed on a day off; work is
+planned before it. `task roll view`, `task rock view`, and `task chain NUMBER`
+show calendar breaks longer than one day, omitting routine Saturdays. Short
+appointments can be handled by adjusting the affected task manually.
+When Roll moves a linked due date across an explicit off or half day, or you
+manually set a chain task due during that time, it prints a subdued cyan calendar
+notice. Routine Saturdays do not trigger a notice. Standalone tasks keep their
+due dates and receive no calendar notice.
 
 For a once-daily or otherwise intentional gap, preserve your own offset with:
 
@@ -271,15 +327,16 @@ Replace the ID and date with your task and planned completion date.
 - Task 38 keeps the fixed date even if earlier tasks move. Tasks after 38 roll
   from that date. If 38 will finish before the break, put the checkpoint on the
   next task instead.
-- A checkpoint is not a Rock finish-line or an automatic no-work calendar.
+- A checkpoint is not a Rock finish-line or a day-off calendar entry.
 - Use `roll_fixed:vacation` or `roll_fixed:off` for the same boundary with a
   distinct marker. Set `wait:` separately if you want the task hidden until a date.
 
 Check the date and `󰩈 checkpoint` marker with `task chain NUMBER`.
 
 Roll uses a predecessor's `due` time while it is active. On completion, it
-applies `end + roll_offset` once and releases the ordinary child from the Roll
-link. See [docs/roll.md](docs/roll.md) for field semantics, fixed dates, errors,
+applies the child's offset from `end` once (counting available time when a
+calendar is included) and releases the ordinary child from the Roll link.
+See [docs/roll.md](docs/roll.md) for field semantics, fixed dates, errors,
 and cycle handling.
 
 ### Rock

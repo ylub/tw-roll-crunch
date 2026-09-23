@@ -11,8 +11,9 @@ Each pending or waiting rolling task identifies one predecessor by UUID in
 - completed predecessor: its `end` timestamp
 - pending or waiting predecessor: its `due` timestamp
 
-The task's `roll_offset` is applied to that base date. This makes the ordinary
-relationship:
+The task's `roll_offset` is applied to that base date. With an included calendar,
+the offset counts available time; otherwise it counts elapsed time. The ordinary
+relationship is:
 
 ```text
 task due = predecessor base + roll_offset
@@ -55,9 +56,10 @@ task's due date. When the linked task has both `remaining` and a matching
 remaining hours / weekly capacity * 7 calendar days
 ```
 
-Saturday and Sunday count. The value is rounded to a 30-minute slot and recalculated
-after task changes. Tasks without capacity or `remaining` keep their existing
-manual offset.
+Without a calendar, Saturday and Sunday count. With an included calendar,
+Roll uses six normal workdays per week and treats the stored offset as available
+time. The value is rounded to a 30-minute slot and recalculated after task
+changes. Tasks without capacity or `remaining` keep their existing offset.
 
 ### `roll_manual`
 
@@ -130,7 +132,8 @@ ordinary predecessor base.
 Rock cannot plan backward through these boundaries. If the path also has a
 fixed finish-line, `task rock FINISH_ID` reports the boundary that blocks its
 plan; inspect the downstream dates with `task chain NUMBER` instead.
-`vacation` and `off` do not create a no-work calendar or set `wait:`. Set the
+`vacation` and `off` do not create a no-work calendar or set `wait:`. Use an
+included `roll.calendar` file for days off; see the README. Set a checkpoint's
 due date and, if needed, Taskwarrior's `wait:` date yourself.
 
 A finish-line (`roll_fixed:finish-line`) is the fixed milestone at the end of a
@@ -181,6 +184,9 @@ could not complete the backward path, including at a checkpoint. An early
 checkpoint is shown as `CHECKPOINT`; one fixed after Rock's needed date is
 shown as `WARN`. This value is read fresh on every view and does not move due
 dates or change `R_mark`.
+With an included calendar, this instead sums each local date's availability
+from today through the deadline, multiplies by weekly capacity / 6, and
+subtracts remaining work.
 
 ## Errors and cycles
 
@@ -219,7 +225,8 @@ date, including the last, can move. Its `--finish` value is only the last
 task's initial date. `task rock chain` accepts the same command but locks the
 last task at `--finish` as its hard finish-line.
 
-Chain spreads tasks across the requested weekdays, preserves normal Taskwarrior
+Without a calendar, Chain spreads tasks across the requested weekdays. With an
+included calendar, it spreads tasks across available dates. Chain preserves normal Taskwarrior
 `depends`, and writes `remaining` as estimated work left. It previews only.
 `task roll chain` makes a flexible schedule; `task rock chain` makes the final
 task a hard `roll_fixed:finish-line`.
@@ -228,12 +235,13 @@ task a hard `roll_fixed:finish-line`.
 `--remaining` to preserve each task's existing `remaining` value; Chain refuses
 to apply when any selected task has no estimate and lists all missing tasks.
 
-Several tasks may share a weekday when the list is longer than the available
-weekdays. Chain places the first task on `--start` and the last task on
+Several tasks may share a date when the list is longer than the available
+dates. Chain places the first task on `--start` and the last task on
 `--finish`; only `task rock chain` fixes that last date as a finish-line. The
 root waits until the start date. Existing final-task due time is preserved;
-absent a due time, Chain uses `16:00Z`. Later Roll updates can move flexible
-due dates onto weekends.
+absent a due time, Chain uses `16:00Z` without a calendar or 16:00 local with
+one. A Rock finish-line may be on a day off; a flexible finish and start must
+be available dates.
 
 ## Chain browser
 

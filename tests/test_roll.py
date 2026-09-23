@@ -17,6 +17,11 @@ UTC = dt.timezone.utc
 
 
 class RollTests(unittest.TestCase):
+    def setUp(self):
+        calendar = patch.object(roll, "load_calendar", return_value=None)
+        calendar.start()
+        self.addCleanup(calendar.stop)
+
     def test_roll_and_rock_help_list_fixed_date_values(self):
         command = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         for arguments in (["help"], ["rock", "help"]):
@@ -148,6 +153,29 @@ class RollTests(unittest.TestCase):
         due, _, _ = roll.calculate_schedule(tasks)
         self.assertEqual(due["B"], dt.datetime(2026, 1, 3, 19, tzinfo=UTC))
 
+    def test_refresh_offsets_ignores_equivalent_taskwarrior_duration(self):
+        tasks = [
+            {"uuid": "A", "status": "pending"},
+            {"uuid": "B", "status": "pending", "project": "work", "remaining": "PT5H30M",
+             "roll": "A", "roll_offset": "PT5H30M"},
+        ]
+        with patch.object(roll, "project_capacity", return_value=144):
+            self.assertEqual(roll.refresh_offsets(tasks, "task", {}), {})
+        self.assertEqual(tasks[1]["roll_offset"], "PT5H30M")
+
+    def test_main_ignores_slack_rounding_already_saved(self):
+        tasks = [{"uuid": "B", "status": "pending", "roll_fixed": "finish-line",
+                  "roll_slack": 20.1028, "r_mark": " finish-line"}]
+        with patch("sys.stdin", io.StringIO("")), patch.object(
+            roll, "task_command", return_value="task"
+        ), patch.object(roll, "load_calendar", return_value={}), patch.object(
+            roll, "export_tasks", return_value=tasks
+        ), patch.object(roll, "refresh_offsets", return_value={}), patch.object(
+            roll, "calculate_schedule", return_value=({}, {"B": 20.102778}, [])
+        ), patch.object(roll, "apply_modifications") as modify:
+            self.assertEqual(roll.main(), 0)
+            modify.assert_not_called()
+
     def test_roll_manual_keeps_explicit_offset_and_still_schedules(self):
         tasks = [
             {"uuid": "A", "status": "pending", "due": "20260101T000000Z"},
@@ -268,7 +296,8 @@ class RollTests(unittest.TestCase):
         self.assertIn("Never use roll:P1D", result.stdout)
         self.assertIn("task chain NUMBER", result.stdout)
         self.assertIn("CHILD stores both roll and roll_offset", result.stdout)
-        self.assertIn("44 is due 2 days after task 43", result.stdout)
+        self.assertIn("With a calendar, the gap counts available time", result.stdout)
+        self.assertIn("config/calendar-5787.taskrc", result.stdout)
 
     def test_roll_view_is_show_alias(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -357,7 +386,7 @@ class RollTests(unittest.TestCase):
             text=True, capture_output=True, check=False,
         )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("task chain [NUMBER]", result.stdout)
+        self.assertIn("task chain NUMBER shows tasks, capacity, and calendar breaks", result.stdout)
 
     def test_task_chains_wrapper_keeps_view_alias(self):
         result = subprocess.run(

@@ -12,6 +12,9 @@ import subprocess
 import sys
 from typing import Any
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from roll_calendar import limited_dates, load_calendar, move_work
+
 UTC = dt.timezone.utc
 ROLLABLE_STATUSES = {"pending", "waiting"}
 MILESTONES = {"checkpoint", "vacation", "off", "finish-line"}
@@ -156,7 +159,9 @@ def project_capacity(command: str, project: str | None, cache: dict[str, float |
     return None
 
 
-def refresh_offsets(tasks: list[dict[str, Any]], command: str) -> dict[str, str]:
+def refresh_offsets(
+    tasks: list[dict[str, Any]], command: str, calendar: dict[dt.date, float] | None = None,
+) -> dict[str, str]:
     """Derive each linked task's calendar offset from remaining/project capacity."""
     cache: dict[str, float | None] = {}
     changes: dict[str, str] = {}
@@ -171,8 +176,9 @@ def refresh_offsets(tasks: list[dict[str, Any]], command: str) -> dict[str, str]
         capacity = project_capacity(command, task.get("project"), cache)
         if remaining is None or capacity is None:
             continue
-        offset = format_duration(dt.timedelta(days=7 * remaining.total_seconds() / 3600 / capacity))
-        if task.get("roll_offset") != offset:
+        days_per_week = 6 if calendar is not None else 7
+        offset = format_duration(dt.timedelta(days=days_per_week * remaining.total_seconds() / 3600 / capacity))
+        if parse_duration(task.get("roll_offset")) != parse_duration(offset):
             changes[str(task["uuid"])] = offset
             task["roll_offset"] = offset
     return changes
@@ -188,6 +194,7 @@ def base_date_for(task: dict[str, Any]) -> dt.datetime | None:
 
 def calculate_schedule(
     tasks: list[dict[str, Any]],
+    calendar: dict[dt.date, float] | None = None,
 ) -> tuple[dict[str, dt.datetime], dict[str, float], list[str]]:
     by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
     memo: dict[str, dt.datetime | None] = {}
@@ -256,7 +263,7 @@ def calculate_schedule(
             memo[memo_key] = None
             return None
 
-        projected_due = predecessor_due + offset
+        projected_due = move_work(predecessor_due, offset, calendar) if calendar is not None else predecessor_due + offset
         kind = milestone_kind(task)
         if kind and respect_milestones:
             fixed_due = parse_task_date(task.get("due"))
@@ -337,10 +344,11 @@ def create_phoenix_task(command: str, task: dict[str, Any], due: dt.datetime) ->
 
 def main() -> int:
     input_data = sys.stdin.read()
-    if not input_data.strip():
-        return 0
     command = task_command()
     try:
+        calendar = load_calendar(command)
+        if not input_data.strip() and calendar is None:
+            return 0
         changed_uuids = {
             str(task["uuid"])
             for line in input_data.splitlines()
@@ -349,13 +357,28 @@ def main() -> int:
             and task.get("uuid")
         }
         tasks = export_tasks(command)
-        offset_changes = refresh_offsets(tasks, command)
-        calculated, slack_hours, warnings = calculate_schedule(tasks)
+        offset_changes = refresh_offsets(tasks, command, calendar)
+        calculated, slack_hours, warnings = calculate_schedule(tasks, calendar)
         by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
         changed_due_dates = 0
         changed_slack_values = 0
         released_links = 0
         phoenix_created = 0
+        notice_dates: set[dt.date] = set()
+        predecessors = {str(task.get("roll")) for task in tasks if task.get("roll")}
+
+        if calendar is not None:
+            for uuid in changed_uuids:
+                task = by_uuid.get(uuid)
+                if task is None or (not task.get("roll") and uuid not in predecessors):
+                    continue
+                due = parse_task_date(task.get("due"))
+                if due is None:
+                    continue
+                local = due.astimezone()
+                value = calendar.get(local.date())
+                if value == 0 or (value == 0.5 and local.time() > dt.time(12)):
+                    notice_dates.add(local.date())
 
         for uuid in changed_uuids:
             task = by_uuid.get(uuid)
@@ -414,7 +437,7 @@ def main() -> int:
                     old_slack = float(task.get("roll_slack"))
                 except (TypeError, ValueError):
                     old_slack = None
-                if old_slack is None or abs(old_slack - slack_hours[uuid]) > 0.000001:
+                if old_slack is None or f"{old_slack:g}" != f"{slack_hours[uuid]:g}":
                     modifications.append(f"roll_slack:{slack_hours[uuid]:g}")
                     slack_changed = True
             elif "roll_slack" in task:
@@ -439,6 +462,10 @@ def main() -> int:
                 changed_due_dates += int(due_changed)
                 changed_slack_values += int(slack_changed)
                 released_links += int(link_released)
+                if due_changed and calendar is not None and predecessor is not None:
+                    base = calculated.get(predecessor_uuid) or base_date_for(predecessor)
+                    if base is not None:
+                        notice_dates.update(limited_dates(base, calculated[uuid], calendar))
             except Exception as exc:
                 warnings.append(f"Roll {uuid[:8]} update failed: {exc}")
 
@@ -459,6 +486,15 @@ def main() -> int:
             )
         if updates:
             print(f"Roll updated {' and '.join(updates)}.")
+        if notice_dates:
+            days = sorted(notice_dates)
+            dates = ", ".join(str(day) for day in days[:3])
+            if len(days) > 3:
+                dates += f", +{len(days) - 3} more"
+            notice = f"Roll calendar: limited availability on {dates}; review task chain."
+            if "NO_COLOR" not in os.environ and os.environ.get("TERM") not in {None, "dumb"}:
+                notice = f"\033[2;36m{notice}\033[0m"
+            print(notice)
         for warning in dict.fromkeys(warnings):
             print(warning)
     except Exception as exc:

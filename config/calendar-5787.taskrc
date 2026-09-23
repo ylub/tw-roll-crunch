@@ -1,0 +1,36 @@
+# 5787 Diaspora days off (2026-2027).
+# Source: https://www.hebcal.com/holidays/2026-2027
+# Calendar dates from Hebcal.com, CC BY 4.0: https://www.hebcal.com/home/195/jewish-calendar-rest-api
+# Copy this file to a personal location, add vacations there, and include it from .taskrc.
+# Values: 0 = off, 0.5 = half capacity, 1 = available.
+
+# Erev Rosh Hashanah; Rosh Hashanah
+roll.calendar.2026-09-11=0.5
+roll.calendar.2026-09-12..2026-09-13=0
+
+# Erev Yom Kippur; Yom Kippur
+roll.calendar.2026-09-20=0.5
+roll.calendar.2026-09-21=0
+
+# Erev Sukkos; first two days
+roll.calendar.2026-09-25=0.5
+roll.calendar.2026-09-26..2026-09-27=0
+
+# Erev Shemini Atzeres; Shemini Atzeres and Simchas Torah
+roll.calendar.2026-10-02=0.5
+roll.calendar.2026-10-03..2026-10-04=0
+
+# Erev Pesach; first two days
+roll.calendar.2027-04-21=0.5
+roll.calendar.2027-04-22..2027-04-23=0
+
+# Erev last days of Pesach; last two days
+roll.calendar.2027-04-27=0.5
+roll.calendar.2027-04-28..2027-04-29=0
+
+# Erev Shavuos; Shavuos
+roll.calendar.2027-06-10=0.5
+roll.calendar.2027-06-11..2027-06-12=0
+
+# Tisha B'Av (https://www.hebcal.com/holidays/tisha-bav-2027)
+roll.calendar.2027-08-12=0
