@@ -61,13 +61,14 @@ How Roll reads
 Link a task
   task CHILD modify roll:PREDECESSOR_UUID roll_offset:P1D
 
-Pause at a checkpoint
-  task TASK_ID modify due:YYYY-MM-DD roll_fixed:checkpoint
-  Choose the first task to finish after the break.
-  Set its planned due date and checkpoint together.
+Fix one task's due date in a chain
+  Example: ID 2 due Sep 24 at noon, local time:
+  task 2 modify due:2026-09-24T12:00:00 roll_fixed:checkpoint
+  Use the ID column in task chain NUMBER. Set due and checkpoint together.
   Changing due alone lets Roll recalculate it from the predecessor.
-  Its date stays fixed; later tasks roll from it. Earlier tasks do not move.
-  Check with task chain NUMBER. This does not block work during the break.
+  Task 2 stays at noon; later tasks roll from noon. Earlier tasks do not move.
+  For the last task before Yom Tov, fix that task at Erev Yom Tov noon.
+  Check with task chain NUMBER. A checkpoint does not block work itself.
 
 Keep a once-daily gap
   task CHILD modify roll_manual:yes roll_offset:P1D

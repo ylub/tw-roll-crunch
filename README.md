@@ -311,22 +311,24 @@ A --2d--> B --4d--> C (checkpoint) --> D --> E (flexible leaf)
 
 Set `roll_fixed:finish-line` on E only when E has a firm deadline for Rock.
 
-#### Pause a chain at a checkpoint
+#### Fix a middle task's due date
 
-Suppose task 38 is the first task you expect to finish after a break. Set its
-planned due date and checkpoint together:
+For the chain shown by `task chain 2`, suppose the row with ID `2` must be due
+September 24, 2026 at noon local time:
 
 ```sh
-task 38 modify due:2026-10-06 roll_fixed:checkpoint
+task 2 modify due:2026-09-24T12:00:00 roll_fixed:checkpoint
 ```
 
-Replace the ID and date with your task and planned completion date.
+Use the **ID** column, not the chain number or row position. Change the date
+and ID for your own task. `roll_fixed:checkpoint` holds that task at the time
+you set; later tasks roll from it. Earlier tasks do not move.
 
 - Changing `due` alone is not enough: Roll can recalculate a flexible task's
   date from its predecessor.
-- Task 38 keeps the fixed date even if earlier tasks move. Tasks after 38 roll
-  from that date. If 38 will finish before the break, put the checkpoint on the
-  next task instead.
+- To make a task the last one before Yom Tov, set **that task** to Erev Yom Tov
+  at 12:00 local time and mark it `roll_fixed:checkpoint`. With a positive work
+  gap, the next task lands after the calendar's days off.
 - A checkpoint is not a Rock finish-line or a day-off calendar entry.
 - Use `roll_fixed:vacation` or `roll_fixed:off` for the same boundary with a
   distinct marker. Set `wait:` separately if you want the task hidden until a date.
