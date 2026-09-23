@@ -185,8 +185,9 @@ Without a calendar, for every linked task with `remaining` and a matching
 capacity, Roll calculates that task's moving `roll_offset` as
 `remaining hours / weekly capacity * 7 days`. With a calendar, it uses six
 available days per week.
-Roll rounds to 30-minute slots and refreshes the
-offset and downstream flexible dates after any task change.
+Without a calendar, Roll rounds to 30-minute slots. With a calendar, it keeps
+the available-time gap to the second. Roll refreshes the offset and downstream
+flexible dates after any task change.
 
 - Increase a linked task's `remaining`: its due date and later flexible dates
   can move later.
@@ -220,15 +221,16 @@ roll.calendar.2026-12-20..2026-12-27=0
 roll.calendar.2027-01-05=0.5
 ```
 
-Ranges include both endpoints. Values are `0` (off), `0.5` (available until
-12:00:00 local time), and `1` (available all day). Conflicting or invalid
+Ranges include both endpoints. Values are `0` (off), `0.5` (08:45–12:00),
+and `1` (08:45–17:00), all in local time. Conflicting or invalid
 entries block calendar scheduling until fixed. Dates use your computer's local
 timezone. Once the calendar is
 included, Sunday through Friday are available by default and Saturday is off;
 an explicit entry can override Saturday. Weekly project hours are spread over
-six normal workdays. `roll_offset:P1D` then means one available day, including
-when `roll_manual:yes` keeps that amount fixed. Chain's initial flexible due
-times on half days end by 12:00 local time.
+six normal workdays. `roll_offset:P1D` then means one 8h15 workday, including
+when `roll_manual:yes` keeps that amount fixed. Use hour offsets for multiple
+tasks within one day. Chain's initial flexible due times stay within the work
+window; half days end by 12:00 local time.
 
 Roll updates existing flexible chain dates on the next Taskwarrior run, even if
 you only changed the calendar file. Rock, Chain, and `CAPACITY` use
@@ -332,8 +334,12 @@ you set; later tasks roll from it. Earlier tasks do not move.
 - A checkpoint is not a Rock finish-line or a day-off calendar entry.
 - Use `roll_fixed:vacation` or `roll_fixed:off` for the same boundary with a
   distinct marker. Set `wait:` separately if you want the task hidden until a date.
+- For an occasional evening task, manually set its local `due` between 20:00 and
+  23:00 and use `roll_fixed:night`. Its `󰖔 night` Nerd Font marker identifies a
+  fixed checkpoint; later flexible tasks resume in the next work window. Roll
+  never assigns other tasks an evening due time.
 
-Check the date and `󰩈 checkpoint` marker with `task chain NUMBER`.
+Check the fixed date and its marker with `task chain NUMBER`.
 
 Roll uses a predecessor's `due` time while it is active. On completion, it
 applies the child's offset from `end` once (counting available time when a

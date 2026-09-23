@@ -159,7 +159,7 @@ class RollTests(unittest.TestCase):
             {"uuid": "B", "status": "pending", "project": "work", "remaining": "PT5H30M",
              "roll": "A", "roll_offset": "PT5H30M"},
         ]
-        with patch.object(roll, "project_capacity", return_value=144):
+        with patch.object(roll, "project_capacity", return_value=49.5):
             self.assertEqual(roll.refresh_offsets(tasks, "task", {}), {})
         self.assertEqual(tasks[1]["roll_offset"], "PT5H30M")
 
@@ -296,7 +296,7 @@ class RollTests(unittest.TestCase):
         self.assertIn("Never use roll:P1D", result.stdout)
         self.assertIn("task chain NUMBER", result.stdout)
         self.assertIn("CHILD stores both roll and roll_offset", result.stdout)
-        self.assertIn("With a calendar, the gap counts available time", result.stdout)
+        self.assertIn("With a calendar, P1D is one 8h15 workday", result.stdout)
         self.assertIn("config/calendar-5787.taskrc", result.stdout)
 
     def test_roll_view_is_show_alias(self):

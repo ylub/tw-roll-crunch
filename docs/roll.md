@@ -53,13 +53,15 @@ task's due date. When the linked task has both `remaining` and a matching
 `roll.capacity.PROJECT`, Roll sets it to:
 
 ```text
-remaining hours / weekly capacity * 7 calendar days
+without calendar: remaining hours / weekly capacity * 7 calendar days
+with calendar: remaining hours / weekly capacity * 6 workdays
 ```
 
 Without a calendar, Saturday and Sunday count. With an included calendar,
-Roll uses six normal workdays per week and treats the stored offset as available
-time. The value is rounded to a 30-minute slot and recalculated after task
-changes. Tasks without capacity or `remaining` keep their existing offset.
+Roll uses six normal 8h15 workdays per week and treats the stored offset as
+available time; `P1D` means one workday. Without a calendar, the value is
+rounded to a 30-minute slot. The offset is recalculated after task changes.
+Tasks without capacity or `remaining` keep their existing offset.
 
 ### `roll_manual`
 
@@ -95,6 +97,7 @@ Marks a due date as fixed instead of freely rolling it.
 
 - `checkpoint` keeps an intermediate due date fixed while the chain continues.
 - `vacation` and `off` behave like `checkpoint`, with their own display markers.
+- `night` behaves like `checkpoint` for a manually timed 20:00–23:00 local due date.
 - `finish-line` stores a fixed finish-line milestone for the chain.
 
 The older values `yes`, `true`, `on`, and `fixed` remain accepted as aliases
@@ -121,12 +124,12 @@ Treat `roll_slack` as Roll output. Do not use it as a substitute for
 
 Roll writes a compact display marker for Taskwarrior reports. `󰍃 +GAP` means an
 ordinary rolling child, ` finish-line` marks a fixed finish-line deadline,
-and `󰩈 checkpoint`, `󰂒 vacation`, and `󱁕 off` mark fixed checkpoints. It is
+and `󰩈 checkpoint`, `󰂒 vacation`, `󱁕 off`, and `󰖔 night` mark fixed checkpoints. It is
 output only; edit `roll`, `roll_offset`, and `roll_fixed` instead.
 
 ## Fixed dates
 
-A checkpoint, vacation, or off marker is an intermediate boundary. Roll does
+A checkpoint, vacation, off, or night marker is an intermediate boundary. Roll does
 not overwrite its due date. A downstream task uses that fixed due date as its
 ordinary predecessor base.
 Rock cannot plan backward through these boundaries. If the path also has a
@@ -134,7 +137,9 @@ fixed finish-line, `task rock FINISH_ID` reports the boundary that blocks its
 plan; inspect the downstream dates with `task chain NUMBER` instead.
 `vacation` and `off` do not create a no-work calendar or set `wait:`. Use an
 included `roll.calendar` file for days off; see the README. Set a checkpoint's
-due date and, if needed, Taskwarrior's `wait:` date yourself.
+due date and, if needed, Taskwarrior's `wait:` date yourself. Set a night
+checkpoint's local due time between 20:00 and 23:00; Roll schedules later
+flexible tasks in the next work window.
 
 A finish-line (`roll_fixed:finish-line`) is the fixed milestone at the end of a
 chain. Roll keeps that due date stable and uses `roll_slack` to expose whether
@@ -238,8 +243,9 @@ to apply when any selected task has no estimate and lists all missing tasks.
 Several tasks may share a date when the list is longer than the available
 dates. Chain places the first task on `--start` and the last task on
 `--finish`; only `task rock chain` fixes that last date as a finish-line. The
-root waits until the start date. Existing final-task due time is preserved;
-absent a due time, Chain uses `16:00Z` without a calendar or 16:00 local with
+root waits until the start date. Existing final-task due time is preserved for
+a fixed finish-line; flexible times are limited to the work window. Absent a
+due time, Chain uses `16:00Z` without a calendar or 16:00 local with
 one. A Rock finish-line may be on a day off; a flexible finish and start must
 be available dates.
 

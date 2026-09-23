@@ -13,11 +13,11 @@ import sys
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from roll_calendar import limited_dates, load_calendar, move_work
+from roll_calendar import format_work_duration, limited_dates, load_calendar, move_work, work_duration
 
 UTC = dt.timezone.utc
 ROLLABLE_STATUSES = {"pending", "waiting"}
-MILESTONES = {"checkpoint", "vacation", "off", "finish-line"}
+MILESTONES = {"checkpoint", "vacation", "off", "night", "finish-line"}
 
 
 def parse_task_date(value: str | None) -> dt.datetime | None:
@@ -176,9 +176,16 @@ def refresh_offsets(
         capacity = project_capacity(command, task.get("project"), cache)
         if remaining is None or capacity is None:
             continue
-        days_per_week = 6 if calendar is not None else 7
-        offset = format_duration(dt.timedelta(days=days_per_week * remaining.total_seconds() / 3600 / capacity))
-        if parse_duration(task.get("roll_offset")) != parse_duration(offset):
+        workdays = 6 * remaining.total_seconds() / 3600 / capacity
+        offset = (format_work_duration(dt.timedelta(seconds=workdays * 8.25 * 3600))
+                  if calendar is not None else
+                  format_duration(dt.timedelta(days=7 * remaining.total_seconds() / 3600 / capacity)))
+        current = parse_duration(task.get("roll_offset"))
+        proposed = parse_duration(offset)
+        if calendar is not None:
+            current = work_duration(task.get("roll_offset"), current) if current is not None else None
+            proposed = work_duration(offset, proposed)
+        if current != proposed:
             changes[str(task["uuid"])] = offset
             task["roll_offset"] = offset
     return changes
@@ -263,7 +270,7 @@ def calculate_schedule(
             memo[memo_key] = None
             return None
 
-        projected_due = move_work(predecessor_due, offset, calendar) if calendar is not None else predecessor_due + offset
+        projected_due = move_work(predecessor_due, work_duration(task.get("roll_offset"), offset), calendar) if calendar is not None else predecessor_due + offset
         kind = milestone_kind(task)
         if kind and respect_milestones:
             fixed_due = parse_task_date(task.get("due"))
@@ -304,6 +311,8 @@ def r_mark_for(task: dict[str, Any], slack: float | None) -> str | None:
         return "󰂒 vacation"
     elif kind == "off":
         return "󱁕 off"
+    elif kind == "night":
+        return "󰖔 night"
     elif kind == "finish-line":
         return " finish-line"
 

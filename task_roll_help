@@ -15,10 +15,13 @@ from typing import Any
 
 from roll_calendar import (
     availability,
+    capacity_fraction,
+    format_work_duration,
     load_calendar,
     long_breaks,
     move_work,
     work_between,
+    work_duration,
 )
 
 ROLL_HELP = """Taskwarrior Roll — live schedule
@@ -38,19 +41,22 @@ Start here
   roll_fixed:checkpoint   fixed intermediate date (see task chain NUMBER)
   roll_fixed:vacation     named checkpoint for vacation
   roll_fixed:off          named checkpoint for time off
+  roll_fixed:night        manually timed 20:00–23:00 checkpoint (󰖔)
   roll_fixed:finish-line  fixed Rock deadline (see task chain NUMBER)
 
 Calendar (optional)
   Copy config/calendar-5787.taskrc to your own calendar file.
   Add include /absolute/path/to/your-calendar.taskrc to ~/.taskrc once.
-  roll.calendar.DATE=0 marks a day off; 0.5 ends work at 12:00 local time.
+  Work runs 08:45–17:00 local; a 0.5 day runs 08:45–12:00.
+  roll.calendar.DATE=0 marks a day off; 0.5 marks a half day.
   roll.calendar.START..END=0 marks an inclusive range. Use 1 to override a day off.
 
 How Roll reads
   CHILD stores both roll and roll_offset.
   43 --2d--> 44 means task 44 follows task 43 by a two-day gap.
-  With a calendar, the gap counts available time; otherwise it is elapsed time.
-  With project capacity, a child's remaining sets its rounded work gap.
+  With a calendar, P1D is one 8h15 workday; hour gaps can stay within a day.
+  Without a calendar, gaps count elapsed time.
+  With project capacity, a child's remaining sets its work gap.
   Changing remaining can move that child and later tasks, not earlier tasks.
   An included calendar makes Sunday-Friday available and skips Saturday.
   Roll gives a subtle calendar notice when linked due dates cross explicit time off.
@@ -105,13 +111,14 @@ Fixed dates
   roll_fixed:checkpoint   fixed intermediate date; stops Rock here
   roll_fixed:vacation     same boundary, marked for vacation
   roll_fixed:off          same boundary, marked for time off
+  roll_fixed:night        same boundary, manually set due 20:00–23:00 local
   roll_fixed:finish-line  fixed deadline; starts Rock here
   An included roll.calendar file skips days off; the deadline may be on a day off.
   task rock view shows breaks longer than one day, omitting routine Saturdays.
 
 Limits
   Rock previews by default. --apply refuses warnings.
-  A checkpoint, vacation, or off date stops the plan.
+  A checkpoint, vacation, off, or night date stops the plan.
   Completed or released links cannot be Rocked.
 """
 
@@ -133,7 +140,7 @@ Safety
   Preview is default. Add --apply only after preview shows right path.
   Without a calendar, start and finish must be weekdays.
   With a calendar, --start must be available. Sunday is available by default;
-  Saturday is off. Flexible half-day due times end by 12:00 local time.
+  Saturday is off. Flexible work runs 08:45–17:00, or until 12:00 on half days.
   task chain NUMBER shows breaks longer than one day.
   Rock's fixed finish-line may fall on a day off. Multiple tasks may share a day.
 """
@@ -324,7 +331,7 @@ def weekday_dates(
     if calendar is not None:
         if not dates:
             raise ValueError("No available dates in chain range.")
-        weights = [availability(calendar, day) for day in dates]
+        weights = [capacity_fraction(calendar, day) for day in dates]
         total = sum(weights)
         cumulative = []
         running = 0.0
@@ -433,9 +440,9 @@ def chain_candidate(
         if options.get("remaining"):
             task["remaining"] = options["remaining"]
         scheduled_time = local_time
-        if (calendar is not None and availability(calendar, dates[index]) == 0.5
-                and not (hard_finish and index == len(selected) - 1)):
-            scheduled_time = min(local_time, dt.time(12))
+        if calendar is not None and not (hard_finish and index == len(selected) - 1):
+            end = dt.time(12 if availability(calendar, dates[index]) == 0.5 else 17)
+            scheduled_time = min(max(local_time, dt.time(8, 45)), end)
         task["due"] = (
             dt.datetime.combine(dates[index], scheduled_time).astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             if calendar is not None else dates[index].strftime("%Y%m%dT") + due_time
@@ -452,7 +459,7 @@ def chain_candidate(
             gap = dates[index] - dates[index - 1]
         else:
             gap = work_between(parse_date(candidate_by_uuid[selected[index - 1]]["due"]), parse_date(task["due"]), calendar)
-        task["roll_offset"] = format_duration(gap) if gap > dt.timedelta() else "P0D"
+        task["roll_offset"] = (format_work_duration(gap) if calendar is not None else format_duration(gap)) if gap > dt.timedelta() else "P0D"
         if hard_finish and index == len(selected) - 1:
             task["roll_fixed"] = "finish-line"
         else:
@@ -530,7 +537,7 @@ def milestone_kind(task: dict[str, Any]) -> str | None:
     value = str(task.get("roll_fixed") or "").strip().lower()
     if value in {"1", "yes", "true", "on", "fixed"}:
         return "finish-line"
-    return value if value in {"checkpoint", "vacation", "off", "finish-line"} else None
+    return value if value in {"checkpoint", "vacation", "off", "night", "finish-line"} else None
 
 
 def r_mark_for(task: dict[str, Any]) -> str | None:
@@ -541,6 +548,8 @@ def r_mark_for(task: dict[str, Any]) -> str | None:
         return "󰂒 vacation"
     if kind == "off":
         return "󱁕 off"
+    if kind == "night":
+        return "󰖔 night"
     if kind == "finish-line":
         return " finish-line"
     if task.get("roll"):
@@ -624,7 +633,7 @@ def weekday_capacity_slack(
     days = (last - today).days + 1 if last >= today else 0
     if calendar is None:
         return days * weekly_hours / 7 - sum(remaining)
-    available = sum(availability(calendar, today + dt.timedelta(days=index)) for index in range(days))
+    available = sum(capacity_fraction(calendar, today + dt.timedelta(days=index)) for index in range(days))
     return available * weekly_hours / 6 - sum(remaining)
 
 
@@ -665,9 +674,10 @@ def rock_plan(
         if predecessor.get("status") not in {"pending", "waiting"}:
             warnings.append(f"{task_label(predecessor)} is completed or inactive.")
             break
-        required = move_work(required, -offset, calendar) if calendar is not None else required - offset
+        required = move_work(required, -work_duration(current.get("roll_offset"), offset), calendar,
+                             forward_on_zero=False) if calendar is not None else required - offset
         kind = milestone_kind(predecessor)
-        if kind in {"checkpoint", "vacation", "off"}:
+        if kind in {"checkpoint", "vacation", "off", "night"}:
             checkpoint_due = parse_date(predecessor.get("due"))
             detail = f"; fixed {checkpoint_due.date()}" if checkpoint_due else ""
             warnings.append(
@@ -830,7 +840,7 @@ def render_rolls(
                 + target[len(target_id) :]
                 + " " * (24 - len(target))
             )
-            marker = paint(marker, theme.get("warning", "")) if marker.endswith(("checkpoint", "vacation", "off", "finish-line")) else marker
+            marker = paint(marker, theme.get("warning", "")) if marker.endswith(("checkpoint", "vacation", "off", "night", "finish-line")) else marker
             lines.extend(f"  Calendar break: {item}" for item in breaks)
             lines.append(f"{source[:24]:<24}  {offset}  {target}  {marker}")
     else:

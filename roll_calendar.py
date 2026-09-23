@@ -8,6 +8,7 @@ import subprocess
 
 UTC = dt.timezone.utc
 DAY = dt.timedelta(days=1)
+WORKDAY = dt.timedelta(hours=8, minutes=15)
 KEY = re.compile(r"roll\.calendar\.(\d{4}-\d{2}-\d{2})(?:\.\.(\d{4}-\d{2}-\d{2}))?\s+(0|0\.5|1)\s*$")
 
 
@@ -44,6 +45,11 @@ def availability(calendar: dict[dt.date, float], day: dt.date) -> float:
     return calendar.get(day, 0.0 if day.weekday() == 5 else 1.0)
 
 
+def capacity_fraction(calendar: dict[dt.date, float], day: dt.date) -> float:
+    value = availability(calendar, day)
+    return (3.25 / 8.25) if value == 0.5 else value
+
+
 def midnight(day: dt.date) -> dt.datetime:
     """Convert a local date boundary to UTC, respecting the system time zone."""
     return dt.datetime.combine(day, dt.time()).astimezone(UTC)
@@ -54,8 +60,35 @@ def local_wall(value: dt.datetime) -> dt.datetime:
 
 
 def work_window(day: dt.date, calendar: dict[dt.date, float]) -> tuple[dt.datetime, dt.datetime]:
-    start = dt.datetime.combine(day, dt.time())
-    return start, start + DAY * availability(calendar, day)
+    start = dt.datetime.combine(day, dt.time(8, 45))
+    available = availability(calendar, day)
+    if not available:
+        return start, start
+    return start, dt.datetime.combine(day, dt.time(12 if available == 0.5 else 17))
+
+
+def work_duration(raw: object, duration: dt.timedelta) -> dt.timedelta:
+    """Interpret day units as 8h15 of available time; leave hour units alone."""
+    value = str(raw).strip().upper()
+    short = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([DW])", value)
+    if short:
+        days = float(short[1]) * (7 if short[2] == "W" else 1)
+    else:
+        iso = re.match(r"P(?:(?P<weeks>[0-9.]+)W)?(?:(?P<days>[0-9.]+)D)?", value)
+        days = float(iso["weeks"] or 0) * 7 + float(iso["days"] or 0) if iso else 0
+    return duration + (WORKDAY - DAY) * days
+
+
+def format_work_duration(duration: dt.timedelta) -> str:
+    """Store a calendar gap in workday units without rounding away 15 minutes."""
+    seconds = round(duration.total_seconds())
+    days, seconds = divmod(seconds, int(WORKDAY.total_seconds()))
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    parts = f"{hours}H" if hours else ""
+    parts += f"{minutes}M" if minutes else ""
+    parts += f"{seconds}S" if seconds else ""
+    return f"P{days}D" + (f"T{parts}" if parts else "")
 
 
 def limited_dates(start: dt.datetime, end: dt.datetime, calendar: dict[dt.date, float]) -> list[dt.date]:
@@ -89,11 +122,28 @@ def work_between(start: dt.datetime, end: dt.datetime, calendar: dict[dt.date, f
     return dt.timedelta(seconds=total)
 
 
-def move_work(base: dt.datetime, amount: dt.timedelta, calendar: dict[dt.date, float]) -> dt.datetime:
+def move_work(
+    base: dt.datetime, amount: dt.timedelta, calendar: dict[dt.date, float],
+    forward_on_zero: bool = True,
+) -> dt.datetime:
     """Move through available local days, in either direction."""
     remaining = abs(amount.total_seconds())
     if not remaining:
-        return base
+        cursor = base
+        while True:
+            day = cursor.astimezone().date()
+            start, end = work_window(day, calendar)
+            wall = local_wall(cursor)
+            if start < end and start <= wall <= end:
+                return cursor
+            if forward_on_zero:
+                if start < end and wall < start:
+                    return start.astimezone(UTC)
+                cursor = midnight(day + DAY)
+            else:
+                if start < end and wall > end:
+                    return end.astimezone(UTC)
+                cursor = midnight(day) - dt.timedelta(microseconds=1)
     forward = amount.total_seconds() > 0
     cursor = base
     while remaining > 0.000001:
