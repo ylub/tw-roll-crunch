@@ -92,11 +92,12 @@ minutes later. This keeps one future task instead of a pre-made chain.
 Marks a due date as fixed instead of freely rolling it.
 
 - `checkpoint` keeps an intermediate due date fixed while the chain continues.
+- `vacation` and `off` behave like `checkpoint`, with their own display markers.
 - `finish-line` stores a fixed finish-line milestone for the chain.
 
 The older values `yes`, `true`, `on`, and `fixed` remain accepted as aliases
-for the same finish-line behavior. New configuration should use `checkpoint`
-or `finish-line`, because those values state the intent.
+for the same finish-line behavior. New configuration should use a named
+checkpoint or `finish-line`, because those values state the intent.
 
 Any other nonempty value is rejected with a warning, and Roll leaves that task
 unchanged. This prevents a typo from turning a fixed milestone into a rolling
@@ -118,17 +119,19 @@ Treat `roll_slack` as Roll output. Do not use it as a substitute for
 
 Roll writes a compact display marker for Taskwarrior reports. `󰍃 +GAP` means an
 ordinary rolling child, ` finish-line` marks a fixed finish-line deadline,
-and `󰩈 checkpoint` marks a fixed checkpoint. It is output only; edit `roll`,
-`roll_offset`, and `roll_fixed` instead.
+and `󰩈 checkpoint`, `󰂒 vacation`, and `󱁕 off` mark fixed checkpoints. It is
+output only; edit `roll`, `roll_offset`, and `roll_fixed` instead.
 
 ## Fixed dates
 
-A checkpoint is an intermediate boundary. Roll does not overwrite the
-checkpoint's due date. A downstream task uses that fixed due date as its
+A checkpoint, vacation, or off marker is an intermediate boundary. Roll does
+not overwrite its due date. A downstream task uses that fixed due date as its
 ordinary predecessor base.
-Rock cannot plan backward through a checkpoint. If the path also has a fixed
-finish-line, `task rock FINISH_ID` reports that the checkpoint blocks its plan;
-inspect the downstream dates with `task chain NUMBER` instead.
+Rock cannot plan backward through these boundaries. If the path also has a
+fixed finish-line, `task rock FINISH_ID` reports the boundary that blocks its
+plan; inspect the downstream dates with `task chain NUMBER` instead.
+`vacation` and `off` do not create a no-work calendar or set `wait:`. Set the
+due date and, if needed, Taskwarrior's `wait:` date yourself.
 
 A finish-line (`roll_fixed:finish-line`) is the fixed milestone at the end of a
 chain. Roll keeps that due date stable and uses `roll_slack` to expose whether
@@ -173,8 +176,11 @@ path with `CAPACITY` as:
 ```
 
 Positive hours are spare capacity; negative hours mean the path exceeds that
-capacity. `—` means capacity or a `remaining` estimate is missing. This value
-is read fresh on every view and does not move due dates or change `R_mark`.
+capacity. `—` means capacity or a `remaining` estimate is missing, or Rock
+could not complete the backward path, including at a checkpoint. An early
+checkpoint is shown as `CHECKPOINT`; one fixed after Rock's needed date is
+shown as `WARN`. This value is read fresh on every view and does not move due
+dates or change `R_mark`.
 
 ## Errors and cycles
 

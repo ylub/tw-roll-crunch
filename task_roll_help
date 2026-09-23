@@ -27,6 +27,8 @@ Start here
   roll_manual:yes         keep this offset instead of capacity auto-spacing
   phoenix:<duration>      recreate this task once after completion
   roll_fixed:checkpoint   fixed intermediate date (see task chain NUMBER)
+  roll_fixed:vacation     named checkpoint for vacation
+  roll_fixed:off          named checkpoint for time off
   roll_fixed:finish-line  fixed Rock deadline (see task chain NUMBER)
 
 How Roll reads
@@ -79,9 +81,16 @@ How Rock reads
   Rock starts at a finish-line due date and works backward through Roll gaps.
   It prints one root-date command. Roll then moves ordinary children forward.
 
+Fixed dates
+  roll_fixed:checkpoint   fixed intermediate date; stops Rock here
+  roll_fixed:vacation     same boundary, marked for vacation
+  roll_fixed:off          same boundary, marked for time off
+  roll_fixed:finish-line  fixed deadline; starts Rock here
+
 Limits
   Rock previews by default. --apply refuses warnings.
-  A checkpoint stops the plan. Completed or released links cannot be Rocked.
+  A checkpoint, vacation, or off date stops the plan.
+  Completed or released links cannot be Rocked.
 """
 
 CHAIN_HELP = """Taskwarrior Roll + Rock — chain a selected list
@@ -177,6 +186,7 @@ def render_help(
             "Start here",
             "How Roll reads",
             "How Rock reads",
+            "Fixed dates",
             "Link a task",
             "Pause at a checkpoint",
             "Keep a once-daily gap",
@@ -460,13 +470,17 @@ def milestone_kind(task: dict[str, Any]) -> str | None:
     value = str(task.get("roll_fixed") or "").strip().lower()
     if value in {"1", "yes", "true", "on", "fixed"}:
         return "finish-line"
-    return value if value in {"checkpoint", "finish-line"} else None
+    return value if value in {"checkpoint", "vacation", "off", "finish-line"} else None
 
 
 def r_mark_for(task: dict[str, Any]) -> str | None:
     kind = milestone_kind(task)
     if kind == "checkpoint":
         return "󰩈 checkpoint"
+    if kind == "vacation":
+        return "󰂒 vacation"
+    if kind == "off":
+        return "󱁕 off"
     if kind == "finish-line":
         return " finish-line"
     if task.get("roll"):
@@ -584,13 +598,15 @@ def rock_plan(tasks: list[dict[str, Any]], selector: str) -> dict[str, Any]:
             warnings.append(f"{task_label(predecessor)} is completed or inactive.")
             break
         required -= offset
-        if milestone_kind(predecessor) == "checkpoint":
+        kind = milestone_kind(predecessor)
+        if kind in {"checkpoint", "vacation", "off"}:
             checkpoint_due = parse_date(predecessor.get("due"))
             detail = f"; fixed {checkpoint_due.date()}" if checkpoint_due else ""
             warnings.append(
-                f"Checkpoint {task_label(predecessor)} stops Rock: needs {required.date()}{detail}."
+                f"{kind.title()} {task_label(predecessor)} stops Rock: needs {required.date()}{detail}."
             )
-            break
+            return {"finish": finish, "path": path, "warnings": warnings,
+                    "boundary": (kind, predecessor, checkpoint_due, required)}
         path.append((predecessor, required))
         current = predecessor
 
@@ -609,8 +625,31 @@ def rock_plan(tasks: list[dict[str, Any]], selector: str) -> dict[str, Any]:
     return {"finish": finish, "path": path, "root": root, "start": start, "warnings": warnings}
 
 
+def rock_status(plan: dict[str, Any]) -> str:
+    if boundary := plan.get("boundary"):
+        kind, task, fixed, needed = boundary
+        if fixed is None:
+            return f"WARN: {kind.title()} {task_label(task)} has no fixed due date."
+        days = abs((needed.date() - fixed.date()).days)
+        day_count = f"{days} calendar day{'s' if days != 1 else ''}"
+        same_day = fixed.date() == needed.date()
+        fixed_at = fixed.strftime("%Y-%m-%d %H:%M UTC") if same_day else str(fixed.date())
+        needed_at = needed.strftime("%Y-%m-%d %H:%M UTC") if same_day else str(needed.date())
+        if fixed <= needed:
+            timing = f"{day_count} later" if days else "same day"
+            return f"{kind.upper()}: {task_label(task)} fixed {fixed_at}; Rock needs it by {needed_at} ({timing})."
+        timing = f"{day_count} earlier" if days else "earlier that day"
+        return f"WARN: {kind.title()} {task_label(task)} fixed {fixed_at}; Rock needs it by {needed_at} ({timing})."
+    return "READY" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
+
+
 def render_rock_plan(plan: dict[str, Any]) -> str:
     if not plan.get("root"):
+        if plan.get("boundary"):
+            return ("ROCK — plan from a solid deadline\n\n"
+                    f"Deadline: {parse_date(plan['finish'].get('due')).date()}\n"
+                    f"{rock_status(plan)}\n"
+                    "Backward planning stops here; full-path capacity is unavailable.\n")
         return "ROCK — plan from a solid deadline\n\nBLOCKED: " + " ".join(plan["warnings"]) + "\n"
     finish = plan["finish"]
     root = plan["root"]
@@ -709,7 +748,7 @@ def render_rolls(tasks: list[dict[str, Any]], theme: dict[str, str] | None = Non
                 + target[len(target_id) :]
                 + " " * (24 - len(target))
             )
-            marker = paint(marker, theme.get("warning", "")) if marker.endswith(("checkpoint", "finish-line")) else marker
+            marker = paint(marker, theme.get("warning", "")) if marker.endswith(("checkpoint", "vacation", "off", "finish-line")) else marker
             lines.append(f"{source[:24]:<24}  {offset}  {target}  {marker}")
     else:
         lines = ["No active Roll links or milestones."]
@@ -833,7 +872,7 @@ def render_chain_browser(
         deadline = parse_date(leaf.get("due"))
         if milestone_kind(leaf) == "finish-line":
             plan = rock_plan(tasks, str(leaf.get("uuid")))
-            status = "READY" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
+            status = rock_status(plan)
             slack = weekday_capacity_slack(plan, capacities.get(str(leaf.get("project") or "")))
             capacity = f"{slack:+g}h" if slack is not None else "—"
         else:
@@ -875,7 +914,7 @@ def render_chains(tasks: list[dict[str, Any]], theme: dict[str, str] | None = No
         deadline = parse_date(leaf.get("due"))
         if milestone_kind(leaf) == "finish-line":
             plan = rock_plan(tasks, str(leaf.get("uuid")))
-            status = "READY" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
+            status = rock_status(plan)
         else:
             status = "ROLLING"
         if status.startswith("WARN:"):
@@ -921,8 +960,12 @@ def render_chain_details(
         slack = weekday_capacity_slack(plan, capacities.get(str(leaf.get("project") or "")))
         capacity = f"{slack:+g}h" if slack is not None else "—"
         deadline = parse_date(leaf.get("due"))
-        status = "READY" if plan.get("root") and not plan["warnings"] else "WARN: " + plan["warnings"][0]
-        lines.extend(("", f"ROCK: deadline {deadline.date() if deadline else '—'}  capacity {capacity}  {status}"))
+        status = rock_status(plan)
+        if plan.get("boundary"):
+            lines.extend(("", f"ROCK: deadline {deadline.date() if deadline else '—'}  capacity {capacity}",
+                          status, "Backward planning stops here; full-path capacity is unavailable."))
+        else:
+            lines.extend(("", f"ROCK: deadline {deadline.date() if deadline else '—'}  capacity {capacity}  {status}"))
     return "\n".join(lines) + "\n"
 
 

@@ -272,6 +272,8 @@ Replace the ID and date with your task and planned completion date.
   from that date. If 38 will finish before the break, put the checkpoint on the
   next task instead.
 - A checkpoint is not a Rock finish-line or an automatic no-work calendar.
+- Use `roll_fixed:vacation` or `roll_fixed:off` for the same boundary with a
+  distinct marker. Set `wait:` separately if you want the task hidden until a date.
 
 Check the date and `󰩈 checkpoint` marker with `task chain NUMBER`.
 

@@ -14,7 +14,7 @@ from typing import Any
 
 UTC = dt.timezone.utc
 ROLLABLE_STATUSES = {"pending", "waiting"}
-MILESTONES = {"checkpoint", "finish-line"}
+MILESTONES = {"checkpoint", "vacation", "off", "finish-line"}
 
 
 def parse_task_date(value: str | None) -> dt.datetime | None:
@@ -293,6 +293,10 @@ def r_mark_for(task: dict[str, Any], slack: float | None) -> str | None:
     kind = milestone_kind(task)
     if kind == "checkpoint":
         return "󰩈 checkpoint"
+    elif kind == "vacation":
+        return "󰂒 vacation"
+    elif kind == "off":
+        return "󱁕 off"
     elif kind == "finish-line":
         return " finish-line"
 

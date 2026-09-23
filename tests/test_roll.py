@@ -17,6 +17,15 @@ UTC = dt.timezone.utc
 
 
 class RollTests(unittest.TestCase):
+    def test_roll_and_rock_help_list_fixed_date_values(self):
+        command = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        for arguments in (["help"], ["rock", "help"]):
+            with patch("sys.stdout", new_callable=io.StringIO) as output:
+                self.assertEqual(command["main"](arguments), 0)
+            for value in ("checkpoint", "vacation", "off", "finish-line"):
+                with self.subTest(arguments=arguments, value=value):
+                    self.assertIn(f"roll_fixed:{value}", output.getvalue())
+
     def test_chain_fixed_milestones_and_slack(self):
         tasks = [
             {"uuid": "A", "status": "pending", "due": "20260101T000000Z"},
@@ -32,6 +41,27 @@ class RollTests(unittest.TestCase):
         self.assertNotIn("E", due)
         self.assertEqual(slack, {"C": 72.0, "E": 120.0})
         self.assertEqual(warnings, [])
+
+    def test_named_checkpoints_keep_dates_and_stop_rock(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        for kind, marker in (("vacation", "󰂒 vacation"), ("off", "󱁕 off")):
+            with self.subTest(kind=kind):
+                tasks = [
+                    {"id": 1, "uuid": "A", "status": "pending", "due": "20260910T000000Z"},
+                    {"id": 2, "uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P2D", "roll_fixed": kind, "due": "20260916T000000Z"},
+                    {"id": 3, "uuid": "C", "status": "pending", "roll": "B", "roll_offset": "P1D"},
+                    {"id": 4, "uuid": "D", "status": "pending", "roll": "C", "roll_offset": "P3D", "roll_fixed": "finish-line", "due": "20260920T000000Z"},
+                ]
+                due, slack, warnings = roll.calculate_schedule(tasks)
+                self.assertNotIn("B", due)
+                self.assertEqual(due["C"], dt.datetime(2026, 9, 17, tzinfo=UTC))
+                self.assertEqual(slack["B"], 96.0)
+                self.assertEqual(warnings, [])
+                self.assertEqual(roll.r_mark_for(tasks[1], None), marker)
+                self.assertEqual(roll_help["r_mark_for"](tasks[1]), marker)
+                plan = roll_help["rock_plan"](tasks, "4")
+                self.assertNotIn("root", plan)
+                self.assertIn(kind.title(), plan["warnings"][0])
 
     def test_completed_predecessor_uses_end(self):
         tasks = [
@@ -361,6 +391,35 @@ class RollTests(unittest.TestCase):
         plan = roll_help["rock_plan"](tasks, "2")
         self.assertNotIn("root", plan)
         self.assertIn("Checkpoint", plan["warnings"][0])
+        self.assertIn("CHECKPOINT: 1 Check fixed 2026-09-16", roll_help["rock_status"](plan))
+        self.assertIn("full-path capacity is unavailable", roll_help["render_rock_plan"](plan))
+        self.assertIn("CHECKPOINT:", roll_help["render_chain_browser"](tasks))
+        detail = roll_help["render_chain_details"](tasks, 1)
+        self.assertIn("capacity —\nCHECKPOINT:", detail)
+        self.assertIn("Backward planning stops here; full-path capacity is unavailable.", detail)
+        with self.assertRaisesRegex(ValueError, "blocked"):
+            roll_help["apply_rock_plan"](plan, "task")
+
+    def test_rock_checkpoint_wording_distinguishes_early_and_late(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "description": "Write", "roll_fixed": "checkpoint", "due": "20260925T000000Z"},
+            {"id": 2, "uuid": "B", "status": "pending", "description": "Finish", "roll": "A", "roll_offset": "P4D", "roll_fixed": "finish-line", "due": "20261012T000000Z"},
+        ]
+        plan = roll_help["rock_plan"](tasks, "2")
+        self.assertEqual(
+            roll_help["rock_status"](plan),
+            "CHECKPOINT: 1 Write fixed 2026-09-25; Rock needs it by 2026-10-08 (13 calendar days later).",
+        )
+        tasks[0]["due"] = "20261010T000000Z"
+        plan = roll_help["rock_plan"](tasks, "2")
+        self.assertEqual(
+            roll_help["rock_status"](plan),
+            "WARN: Checkpoint 1 Write fixed 2026-10-10; Rock needs it by 2026-10-08 (2 calendar days earlier).",
+        )
+        tasks[0]["due"] = "20261008T010000Z"
+        plan = roll_help["rock_plan"](tasks, "2")
+        self.assertIn("WARN: Checkpoint 1 Write fixed 2026-10-08 01:00 UTC; Rock needs it by 2026-10-08 00:00 UTC", roll_help["rock_status"](plan))
 
     def test_rock_requires_a_linked_finish_line(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
