@@ -315,16 +315,19 @@ Set `roll_fixed:finish-line` on E only when E has a firm deadline for Rock.
 
 #### Fix a middle task's due date
 
-For the chain shown by `task chain 2`, suppose the row with ID `2` must be due
-September 24, 2026 at noon local time:
+Suppose a task currently shown as ID `2` must be due September 24, 2026 at
+noon local time. Check its description, then get its stable UUID:
 
 ```sh
-task 2 modify due:2026-09-24T12:00:00 roll_fixed:checkpoint
+task 2 info
+task_uuid=$(task _get 2.uuid)
+task "$task_uuid" modify due:2026-09-24T12:00:00 roll_fixed:checkpoint
 ```
 
-Use the **ID** column, not the chain number or row position. Change the date
-and ID for your own task. `roll_fixed:checkpoint` holds that task at the time
-you set; later tasks roll from it. Earlier tasks do not move.
+Numeric IDs change when tasks complete, so verify the current ID before
+looking up its UUID. You can reuse the UUID later. Change the date and ID for
+your own task. `roll_fixed:checkpoint` holds that task at the time you set;
+later tasks roll from it. Earlier tasks do not move.
 
 - Changing `due` alone is not enough: Roll can recalculate a flexible task's
   date from its predecessor.

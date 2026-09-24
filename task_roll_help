@@ -68,9 +68,11 @@ Link a task
   task CHILD modify roll:PREDECESSOR_UUID roll_offset:P1D
 
 Fix one task's due date in a chain
-  Example: ID 2 due Sep 24 at noon, local time:
-  task 2 modify due:2026-09-24T12:00:00 roll_fixed:checkpoint
-  Use the ID column in task chain NUMBER. Set due and checkpoint together.
+  Numeric IDs change when tasks complete. Check the current ID, then use its UUID:
+  task 2 info
+  task_uuid=$(task _get 2.uuid)
+  task "$task_uuid" modify due:2026-09-24T12:00:00 roll_fixed:checkpoint
+  Example fixes the current ID 2 at Sep 24 noon, local time.
   Changing due alone lets Roll recalculate it from the predecessor.
   Task 2 stays at noon; later tasks roll from noon. Earlier tasks do not move.
   For the last task before Yom Tov, fix that task at Erev Yom Tov noon.
