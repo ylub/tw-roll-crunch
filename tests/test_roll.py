@@ -27,7 +27,7 @@ class RollTests(unittest.TestCase):
         for arguments in (["help"], ["rock", "help"]):
             with patch("sys.stdout", new_callable=io.StringIO) as output:
                 self.assertEqual(command["main"](arguments), 0)
-            for value in ("checkpoint", "vacation", "off", "finish-line"):
+            for value in ("checkpoint", "vacation", "off", "night", "finish-line"):
                 with self.subTest(arguments=arguments, value=value):
                     self.assertIn(f"roll_fixed:{value}", output.getvalue())
 
@@ -410,6 +410,16 @@ class RollTests(unittest.TestCase):
         output = roll_help["render_rock_plan"](plan)
         self.assertIn("DRY RUN", output)
         self.assertIn("task A modify due:20260914T000000Z", output)
+
+    def test_rock_numeric_id_wins_over_deleted_uuid_prefix(self):
+        roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "root", "status": "pending", "due": "20260923T160000Z"},
+            {"id": 29, "uuid": "finish", "status": "pending", "roll": "root",
+             "roll_offset": "P1D", "roll_fixed": "finish-line", "due": "20261012T170000Z"},
+            {"id": 0, "uuid": "297c773f-deleted", "status": "deleted"},
+        ]
+        self.assertEqual(roll_help["rock_plan"](tasks, "29")["finish"]["uuid"], "finish")
 
     def test_rock_stops_at_checkpoint(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))

@@ -562,11 +562,9 @@ def task_label(task: dict[str, Any]) -> str:
 
 
 def find_task(tasks: list[dict[str, Any]], selector: str) -> dict[str, Any] | None:
-    matches = [
-        task for task in tasks
-        if str(task.get("id")) == selector
-        or str(task.get("uuid", "")).startswith(selector)
-    ]
+    matches = [task for task in tasks if str(task.get("id")) == selector]
+    if not matches:
+        matches = [task for task in tasks if str(task.get("uuid", "")).startswith(selector)]
     return matches[0] if len(matches) == 1 else None
 
 
