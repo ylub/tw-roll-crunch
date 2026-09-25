@@ -340,9 +340,15 @@ def apply_modifications(command: str, uuid: str, modifications: list[str]) -> No
     )
 
 
-def create_phoenix_task(command: str, task: dict[str, Any], due: dt.datetime) -> None:
+def create_phoenix_task(command: str, task: dict[str, Any], due: dt.datetime, count: int | None = None) -> None:
     """Queue one same-description task after a completed Phoenix task."""
     arguments = ["add", f"due:{format_task_date(due)}"]
+    if task.get("phoenix_wait") == "yes":
+        arguments.append(f"wait:{format_task_date(due)}")
+    if count is not None and count > 1:
+        arguments.extend((f"phoenix:{task['phoenix']}", f"phoenix_count:{count - 1}"))
+        if task.get("phoenix_wait") == "yes":
+            arguments.append("phoenix_wait:yes")
     if task.get("project"):
         arguments.append(f"project:{task['project']}")
     arguments.extend(f"+{tag}" for tag in task.get("tags", []) if isinstance(tag, str))
@@ -403,8 +409,14 @@ def main() -> int:
             if delay is None or delay <= dt.timedelta() or end is None or not task.get("description"):
                 warnings.append(f"Phoenix {uuid[:8]}: needs a positive duration and completed task data.")
                 continue
+            count = task.get("phoenix_count")
+            if count is not None and (not isinstance(count, int) or count < 0):
+                warnings.append(f"Phoenix {uuid[:8]}: phoenix_count must be a nonnegative whole number.")
+                continue
+            if count == 0:
+                continue
             try:
-                create_phoenix_task(command, task, end + delay)
+                create_phoenix_task(command, task, end + delay, count)
                 phoenix_created += 1
             except Exception as exc:
                 warnings.append(f"Phoenix {uuid[:8]} creation failed: {exc}")

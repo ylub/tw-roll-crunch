@@ -38,6 +38,10 @@ uda.roll_manual.label=Manual Roll Offset
 
 uda.phoenix.type=duration
 uda.phoenix.label=Phoenix
+uda.phoenix_wait.type=string
+uda.phoenix_wait.label=Phoenix wait
+uda.phoenix_count.type=numeric
+uda.phoenix_count.label=Phoenix copies
 
 uda.roll_fixed.type=string
 uda.roll_fixed.label=Finish-line Milestone

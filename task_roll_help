@@ -37,7 +37,9 @@ Start here
   roll:<UUID>             child's predecessor
   roll_offset:<duration>  child's gap after predecessor (available time with calendar)
   roll_manual:yes         keep this offset instead of capacity auto-spacing
-  phoenix:<duration>      recreate this task once after completion
+  phoenix:<duration>      recreate this task after completion
+  phoenix_wait:yes        hide each new task until due
+  phoenix_count:2         make two more copies, then stop
   roll_fixed:checkpoint   fixed intermediate date (see task chain NUMBER)
   roll_fixed:vacation     named checkpoint for vacation
   roll_fixed:off          named checkpoint for time off
@@ -82,8 +84,10 @@ Keep a once-daily gap
   task CHILD modify roll_manual:yes roll_offset:P1D
   task CHILD modify roll_manual:
 
-Queue one same-name task after completion
-  task TASK_ID modify phoenix:PT90M
+Repeat laundry for three loads
+  task TASK_ID modify phoenix:PT90M phoenix_wait:yes phoenix_count:2
+  Count means additional copies. Each copy is due 90 minutes after completion.
+  Omit phoenix_count for one copy. Use phoenix_count:0 to stop respawning.
 
 Fix roll:P1D mistake
   task TASK_ID modify roll:
@@ -226,7 +230,7 @@ def render_help(
             "Pause at a checkpoint",
             "Keep a once-daily gap",
             "Set a finish-line on an existing linked final task",
-            "Queue one same-name task after completion",
+            "Repeat laundry for three loads",
             "Fix roll:P1D mistake",
             "Limits",
         }:

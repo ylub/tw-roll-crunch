@@ -79,17 +79,19 @@ also clears `roll_manual`.
 
 ### `phoenix`
 
-Set a positive duration to create one new task with the same description when
+Set a positive duration to create a new task with the same description when
 this task completes. The new task is due after the completion time. It keeps
-the project and tags, but does not inherit `phoenix`, Roll fields, or tracking
-session data.
+the project and tags, but not Roll fields or tracking session data.
 
 ```sh
-task TASK_ID modify phoenix:PT90M
+task TASK_ID modify phoenix:PT90M phoenix_wait:yes phoenix_count:2
 ```
 
-Completing `Laundry` with this field creates one new `Laundry` task due 90
-minutes later. This keeps one future task instead of a pre-made chain.
+`phoenix_count:2` makes two additional copies, for three loads total. Each
+copy is due 90 minutes after the previous one is completed. `phoenix_wait:yes`
+hides each copy from normal task lists until its due time. Without it, each
+copy is visible right away. Omit `phoenix_count` for one copy. Set
+`phoenix_count:0` to stop future copies.
 
 ### `roll_fixed`
 

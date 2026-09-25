@@ -252,17 +252,20 @@ task TASK_ID modify roll_manual:yes roll_offset:P1D
 Roll still moves that task's due date from its predecessor. Clear the override
 with `task TASK_ID modify roll_manual:` to resume capacity auto-spacing.
 
-#### Repeat once with Phoenix
+#### Repeat with Phoenix
 
-For a task that should appear once more after it is completed, use Phoenix:
+For laundry that should reappear after the load finishes, use Phoenix with wait:
 
 ```sh
-task TASK_ID modify phoenix:PT90M
+task TASK_ID modify phoenix:PT90M phoenix_wait:yes phoenix_count:2
 ```
 
-Completing `Laundry` creates one same-named `Laundry` task due 90 minutes
-later. The new task keeps project and tags, but not `phoenix`, Roll fields, or
-tracking session data.
+`phoenix_count:2` creates two more copies: three loads total, including this
+task. Each copy is due 90 minutes after the previous one is completed and
+waits until then, so it stays off normal task lists while the load runs.
+Omit `phoenix_count` for one copy. Omit `phoenix_wait:yes` when a new task
+should be visible right away. The copies keep project and tags, but not Roll
+fields or tracking session data.
 
 `task roll chain` creates a flexible chain with no fixed finish-line. Its last
 task is a leaf whose due date can move; `--finish` sets only its initial date.

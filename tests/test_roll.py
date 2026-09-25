@@ -30,6 +30,11 @@ class RollTests(unittest.TestCase):
             for value in ("checkpoint", "vacation", "off", "night", "finish-line"):
                 with self.subTest(arguments=arguments, value=value):
                     self.assertIn(f"roll_fixed:{value}", output.getvalue())
+        with patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(command["main"](["help"]), 0)
+        self.assertIn("phoenix_wait:yes", output.getvalue())
+        self.assertIn("phoenix_count:2", output.getvalue())
+        self.assertIn("two more copies", output.getvalue())
 
     def test_chain_fixed_milestones_and_slack(self):
         tasks = [
@@ -217,6 +222,7 @@ class RollTests(unittest.TestCase):
             "uuid": "A", "status": "completed", "end": "20260102T120000Z",
             "modified": "20260102T120000Z", "description": "Laundry",
             "project": "home", "tags": ["errands", "home"], "phoenix": "PT90M",
+            "phoenix_wait": "yes",
             "track_session": "must-not-copy",
         }]
         with patch("sys.stdin", io.StringIO(json.dumps({"uuid": "A"}))), patch.object(
@@ -226,9 +232,38 @@ class RollTests(unittest.TestCase):
         ) as task_run:
             self.assertEqual(roll.main(), 0)
         task_run.assert_called_once_with(
-            "task", "add", "due:20260102T133000Z", "project:home", "+errands",
+            "task", "add", "due:20260102T133000Z", "wait:20260102T133000Z", "project:home", "+errands",
             "+home", "--", "Laundry"
         )
+
+    def test_phoenix_without_wait_remains_visible(self):
+        due = dt.datetime(2026, 1, 2, 13, 30, tzinfo=UTC)
+        with patch.object(roll, "task_run") as task_run:
+            roll.create_phoenix_task("task", {"description": "Laundry"}, due)
+        task_run.assert_called_once_with("task", "add", "due:20260102T133000Z", "--", "Laundry")
+
+    def test_phoenix_count_repeats_then_stops(self):
+        for count, expected in (
+            (2, ("due:20260102T133000Z", "wait:20260102T133000Z", "phoenix:PT90M", "phoenix_count:1", "phoenix_wait:yes", "--", "Laundry")),
+            (1, ("due:20260102T133000Z", "wait:20260102T133000Z", "--", "Laundry")),
+            (0, None),
+            (1.5, None),
+        ):
+            task = {
+                "uuid": "A", "status": "completed", "end": "20260102T120000Z",
+                "modified": "20260102T120000Z", "description": "Laundry",
+                "phoenix": "PT90M", "phoenix_wait": "yes", "phoenix_count": count,
+            }
+            with self.subTest(count=count), patch(
+                "sys.stdin", io.StringIO(json.dumps({"uuid": "A"}))
+            ), patch.object(roll, "task_command", return_value="task"), patch.object(
+                roll, "export_tasks", return_value=[task]
+            ), patch.object(roll, "task_run") as task_run:
+                self.assertEqual(roll.main(), 0)
+                if expected is None:
+                    task_run.assert_not_called()
+                else:
+                    task_run.assert_called_once_with("task", "add", *expected)
 
     def test_phoenix_ignores_completed_task_without_a_completion_event(self):
         tasks = [{
