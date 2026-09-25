@@ -2,6 +2,21 @@
 
 All notable changes are recorded here for each release.
 
+## [2026.09.24.1] - 2026-09-24
+
+### Added
+
+- Phoenix can recreate a task after completion, optionally hide each new copy
+  until it is due, and stop after a chosen number of additional copies.
+- Roll can schedule within work hours using a calendar with days off and half days.
+- A `night` checkpoint marks a manually timed evening deadline.
+
+### Changed
+
+- Manual Roll offsets can stay fixed instead of following capacity spacing.
+- Roll and Rock help and reports clarify fixed dates, chain paths, and stable
+  task identity.
+
 ## [2026.09.20.1] - 2026-09-20
 
 ### Changed
