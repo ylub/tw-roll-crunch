@@ -138,7 +138,7 @@ Rock cannot plan backward through these boundaries. If the path also has a
 fixed finish-line, `task rock FINISH_ID` reports the boundary that blocks its
 plan; inspect the downstream dates with `task chain NUMBER` instead.
 `vacation` and `off` do not create a no-work calendar or set `wait:`. Use an
-included `roll.calendar` file for days off; see the README. Set a checkpoint's
+included `roll.calendar` file for days off; see the [calendar guide](setup-and-usage.md#days-off-and-half-days). Set a checkpoint's
 due date and, if needed, Taskwarrior's `wait:` date yourself. Set a night
 checkpoint's local due time between 20:00 and 23:00; Roll schedules later
 flexible tasks in the next work window.
