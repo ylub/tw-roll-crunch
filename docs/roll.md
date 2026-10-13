@@ -23,7 +23,8 @@ When an ordinary task's predecessor completes, Roll applies that calculation
 one final time and removes the child's `roll` and `roll_offset`. The child is
 then independent, so later due-date edits remain in place. Existing links to
 already-completed predecessors are released without changing the current due
-date. Fixed milestones keep their links for slack calculation.
+date. Later tasks are calculated from that retained date in the same update.
+Fixed milestones keep their links for slack calculation.
 
 For example:
 
@@ -112,9 +113,10 @@ due date.
 
 ### `roll_slack`
 
-On a fixed task, records the hours between its fixed due date and the fully
-projected arrival. The projection follows the whole chain and treats earlier
-fixed milestones as ordinary rolling tasks instead of schedule resets.
+The label is "Schedule cushion (elapsed hours)". For a fixed task, this is the
+elapsed time between projected arrival and the fixed due date. The projection
+follows the whole chain and treats earlier fixed milestones as ordinary
+rolling tasks instead of schedule resets.
 
 Positive slack means the projected chain arrives early; zero means it reaches
 the fixed date; negative slack means it arrives late.
@@ -178,22 +180,39 @@ roll.capacity.posek.ch=8
 
 The longest dotted project match wins, so `posek.ch_12` uses `posek=25` while
 `posek.ch.section` uses `posek.ch=8`. `task chain` shows each finish-line
-path with `CAPACITY` as:
+path with `SPARE WORK HOURS` as:
 
 ```text
-(calendar days from today through deadline, including Saturday and Sunday)
-* weekly capacity / 7 - total path remaining
+Without a calendar:
+elapsed hours from now to deadline * weekly capacity / 168 - total path remaining
+
+With a calendar:
+available work hours from now to deadline * weekly capacity / 49.5
+- total path remaining
 ```
 
-Positive hours are spare capacity; negative hours mean the path exceeds that
-capacity. `—` means capacity or a `remaining` estimate is missing, or Rock
-could not complete the backward path, including at a checkpoint. An early
+Positive hours are spare project work time; negative hours mean the path
+needs more work time than is available. Schedule cushion (`roll_slack`) measures
+elapsed time between projected arrival and deadline, including nights and days
+off. `—` means capacity or a `remaining` estimate is missing, or Rock could not
+complete the backward path, including at a checkpoint. An early
 checkpoint is shown as `CHECKPOINT`; one fixed after Rock's needed date is
 shown as `WARN`. This value is read fresh on every view and does not move due
 dates or change `R_mark`.
-With an included calendar, this instead sums each local date's availability
-from today through the deadline, multiplies by weekly capacity / 6, and
-subtracts remaining work.
+The estimate counts only the hours left today and before the deadline on its
+final day. Calendar work windows are 08:45–17:00 on full days and 08:45–12:00
+on half days. Days off contribute no work hours. After the deadline, available
+work time is zero and spare work time is the negative remaining estimate.
+
+`task chain NUMBER` shows three values:
+
+- Time until deadline: elapsed time, including nights and days off.
+- Available project work time: estimated hours within your project allocation.
+- Spare work time: available project hours minus the path's remaining work.
+
+These estimates do not subtract work from competing chains. Available project
+work time requires configured weekly capacity and a complete Rock path. Spare
+work time also requires a remaining estimate for each task.
 
 ## Errors and cycles
 

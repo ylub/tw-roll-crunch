@@ -44,6 +44,8 @@ task roll help
 
 Diagnostics should list the three Roll/Crunch hooks as active.
 
+For an existing installation, [upgrade the hooks and shared helpers together](docs/setup-and-usage.md#uninstall-or-upgrade).
+
 ## Start here
 
 Show your linked tasks:

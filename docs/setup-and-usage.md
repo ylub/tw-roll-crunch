@@ -77,9 +77,11 @@ Roll only:
 ```sh
 install -m 0755 hooks/roll.py "$HOOK_DIR/on-exit-roll.py"
 install -m 0644 roll_calendar.py "${TASKDATA:-$HOME/.task}/roll_calendar.py"
+install -m 0644 roll_crunch.py "${TASKDATA:-$HOME/.task}/roll_crunch.py"
 mkdir -p "$HOME/.local/bin"
 install -m 0755 task_roll_help "$HOME/.local/bin/task_roll_help"
 install -m 0644 roll_calendar.py "$HOME/.local/bin/roll_calendar.py"
+install -m 0644 roll_crunch.py "$HOME/.local/bin/roll_crunch.py"
 install -m 0755 task_rock "$HOME/.local/bin/task_rock"
 install -m 0755 task_chain "$HOME/.local/bin/task_chain"
 install -m 0755 task_chains "$HOME/.local/bin/task_chains"
@@ -88,6 +90,7 @@ install -m 0755 task_chains "$HOME/.local/bin/task_chains"
 Crunch only:
 
 ```sh
+install -m 0644 roll_crunch.py "${TASKDATA:-$HOME/.task}/roll_crunch.py"
 install -m 0755 hooks/crunch.py "$HOOK_DIR/on-modify.crunch.py"
 ln -s on-modify.crunch.py "$HOOK_DIR/on-add.crunch.py"
 ```
@@ -100,15 +103,18 @@ select another file. The supported `include` syntax is documented in the
 ### Uninstall or upgrade
 
 To uninstall, remove the three installed hook paths, the two installed
-`roll_calendar.py` copies, `$HOME/.local/bin/task_roll_help`,
+`roll_calendar.py` copies, the two installed `roll_crunch.py` copies,
+`$HOME/.local/bin/task_roll_help`,
 `$HOME/.local/bin/task_rock`, `$HOME/.local/bin/task_chain`,
 `$HOME/.local/bin/task_chains`, and the `include` line you added to your
 Taskwarrior config. Removing hooks does not delete task data.
 
 For an existing installation, `install.sh` refuses to overwrite its files.
-Back up the installed Roll hook and commands outside the hooks directory,
-then use the manual Roll install commands above to replace them. Leave your
-personal calendar file in place.
+Back up the installed hooks, helpers, and commands outside the hooks directory.
+Upgrade the hooks and their `roll_calendar.py` / `roll_crunch.py` helpers together
+using the manual commands above for the components you use. Review any personal
+Crunch customizations before replacing that hook. Leave your personal calendar
+file in place.
 
 ## Usage
 
@@ -166,11 +172,17 @@ roll.capacity.posek=25
 roll.capacity.other-project=12
 ```
 
-`task chain` adds `CAPACITY` for each Rock finish-line path. It is the
-available project hours from today through its deadline, minus the path's total
-`remaining` estimate. Without a calendar, Saturday and Sunday count.
+`task chain` adds `SPARE WORK HOURS` for each Rock finish-line path. It is the
+available project hours from now until its deadline, minus the path's total
+`remaining` estimate. Partial days count only the time left. With a calendar,
+work hours, half days, and days off apply. Without a calendar, capacity is
+spread evenly across all seven days.
 `—` means the project has no capacity setting or a path task lacks `remaining`.
-The `CAPACITY` column is a feasibility signal; it does not change `R_mark`.
+The `SPARE WORK HOURS` column is a feasibility signal; it does not change `R_mark`.
+`task chain NUMBER` shows time until the deadline, available project work time,
+and spare work time. Time until the deadline includes nights and days off.
+Project work time is an estimate based on your weekly allocation; it does not
+subtract work from competing chains.
 
 Without a calendar, for every linked task with `remaining` and a matching
 capacity, Roll calculates that task's moving `roll_offset` as
@@ -224,7 +236,7 @@ tasks within one day. Chain's initial flexible due times stay within the work
 window; half days end by 12:00 local time.
 
 Roll updates existing flexible chain dates on the next Taskwarrior run, even if
-you only changed the calendar file. Rock, Chain, and `CAPACITY` use
+you only changed the calendar file. Rock, Chain, and `SPARE WORK HOURS` use
 the same calendar. A Rock finish-line may stay fixed on a day off; work is
 planned before it. `task roll view`, `task rock view`, and `task chain NUMBER`
 show calendar breaks longer than one day, omitting routine Saturdays. Short

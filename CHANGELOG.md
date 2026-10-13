@@ -2,6 +2,26 @@
 
 All notable changes are recorded here for each release.
 
+## [2026.10.12.1] - 2026-10-12
+
+### Fixed
+
+- Releasing a link to an already-completed predecessor preserves the retained
+  due date when calculating downstream tasks in the same update.
+- Rock checks affected branches below the root and respects fixed-date boundaries.
+- Roll and chain building refresh or clear Crunch scores during automated writes,
+  without enabling unrelated hooks or writing undefined score attributes.
+- Roll and Rock chain commands handle Taskwarrior's nested alias expansion.
+- Phoenix accepts whole-number counts exported as numeric floating-point values.
+
+### Changed
+
+- Chain reports distinguish elapsed schedule cushion from spare project work
+  hours, prorate partial days, and show time remaining until the deadline.
+- Crunch scoring is shared by the hook and automated schedule writers through
+  `roll_crunch.py`. Existing installations must upgrade the helper and consumers
+  together; see the setup guide's upgrade instructions.
+
 ## [2026.09.24.1] - 2026-09-24
 
 ### Added

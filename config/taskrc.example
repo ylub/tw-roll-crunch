@@ -47,7 +47,7 @@ uda.roll_fixed.type=string
 uda.roll_fixed.label=Finish-line Milestone
 
 uda.roll_slack.type=numeric
-uda.roll_slack.label=Roll Slack Hours
+uda.roll_slack.label=Schedule cushion (elapsed hours)
 
 # Optional weekly project capacity; dotted children inherit their parent.
 # roll.capacity.posek=25

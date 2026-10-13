@@ -21,12 +21,14 @@ for target in on-exit-roll.py on-modify.crunch.py on-add.crunch.py; do
     }
 done
 
-[ ! -e "$data/roll_calendar.py" ] && [ ! -L "$data/roll_calendar.py" ] || {
-    echo "Refusing to replace existing calendar helper: $data/roll_calendar.py" >&2
-    exit 1
-}
+for target in roll_calendar.py roll_crunch.py; do
+    [ ! -e "$data/$target" ] && [ ! -L "$data/$target" ] || {
+        echo "Refusing to replace existing helper: $data/$target" >&2
+        exit 1
+    }
+done
 
-for target in task_roll_help task_rock task_chain task_chains roll_calendar.py; do
+for target in task_roll_help task_rock task_chain task_chains roll_calendar.py roll_crunch.py; do
     [ ! -e "$bin/$target" ] && [ ! -L "$bin/$target" ] || {
         echo "Refusing to replace existing command: $bin/$target" >&2
         exit 1
@@ -35,10 +37,12 @@ done
 
 install -m 755 "$root/hooks/roll.py" "$hooks/on-exit-roll.py"
 install -m 644 "$root/roll_calendar.py" "$data/roll_calendar.py"
+install -m 644 "$root/roll_crunch.py" "$data/roll_crunch.py"
 install -m 755 "$root/hooks/crunch.py" "$hooks/on-modify.crunch.py"
 ln -s on-modify.crunch.py "$hooks/on-add.crunch.py"
 install -m 755 "$root/task_roll_help" "$bin/task_roll_help"
 install -m 644 "$root/roll_calendar.py" "$bin/roll_calendar.py"
+install -m 644 "$root/roll_crunch.py" "$bin/roll_crunch.py"
 install -m 755 "$root/task_rock" "$bin/task_rock"
 install -m 755 "$root/task_chain" "$bin/task_chain"
 install -m 755 "$root/task_chains" "$bin/task_chains"

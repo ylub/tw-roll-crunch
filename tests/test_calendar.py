@@ -192,6 +192,52 @@ class CalendarTests(unittest.TestCase):
             plan, 49.5, dt.datetime(2026, 9, 25, 13, tzinfo=UTC), {half: 0.5},
         ), -0.75)  # 3h15 available, less 4h remaining.
 
+    def test_project_capacity_prorates_partial_days_and_detail_labels(self):
+        code = runpy.run_path(str(ROOT / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "remaining": "PT2H"},
+            {"id": 2, "uuid": "B", "status": "pending", "project": "oraysa",
+             "remaining": "PT20M", "roll": "A", "roll_offset": "PT90M",
+             "roll_fixed": "finish-line", "due": "20261012T170000Z"},
+        ]
+        now = dt.datetime(2026, 10, 8, 19, 44, tzinfo=UTC)
+        plan = code["rock_plan"](tasks, "B", {})
+        available = (2 + 16 / 60 + 8.25 + 8.25 + 3.25) * 18 / (6 * 8.25)
+        self.assertAlmostEqual(code["available_project_hours"](plan, 18, now, {}), available)
+        self.assertAlmostEqual(code["weekday_capacity_slack"](plan, 18, now, {}), available - 7 / 3)
+        detail = code["render_chain_details"](tasks, 1, capacities={"oraysa": 18}, calendar={}, now=now)
+        self.assertIn("Time until deadline: 93h 16m", detail)
+        self.assertIn("Available project work time: 8.01h", detail)
+        self.assertIn("Spare work time: +5.67h", detail)
+        for hour in (0, 12):  # Overnight and before opening count the same work windows.
+            before = dt.datetime(2026, 10, 9, hour, tzinfo=UTC)
+            self.assertAlmostEqual(code["available_project_hours"](plan, 18, before, {}),
+                                   (8.25 * 2 + 3.25) * 18 / (6 * 8.25))
+        expired = dt.datetime(2026, 10, 12, 18, tzinfo=UTC)
+        self.assertEqual(code["available_project_hours"](plan, 18, expired, {}), 0)
+        self.assertAlmostEqual(code["weekday_capacity_slack"](plan, 18, expired, {}), -7 / 3)
+        self.assertIsNone(code["available_project_hours"](plan, None, now, {}))
+        tasks[0].pop("remaining")
+        self.assertIsNone(code["weekday_capacity_slack"](plan, 18, now, {}))
+        missing = code["render_chain_details"](tasks, 1, capacities={"oraysa": 18}, calendar={}, now=now)
+        self.assertIn("Available project work time: 8.01h", missing)
+        self.assertIn("Spare work time: —", missing)
+
+    def test_available_capacity_respects_half_days_off_days_and_dst(self):
+        code = runpy.run_path(str(ROOT / "task_roll_help"))
+        task = {"remaining": "PT1H", "due": "20260925T163000Z"}
+        plan = {"root": task, "finish": task, "path": [(task, None)]}
+        now = dt.datetime(2026, 9, 25, 15, tzinfo=UTC)  # 10:00 Chicago.
+        for calendar, expected in (({dt.date(2026, 9, 25): 0.5}, 1.5),
+                                   ({dt.date(2026, 9, 25): 0}, 0)):
+            with self.subTest(calendar=calendar):
+                self.assertEqual(code["available_project_hours"](plan, 49.5, now, calendar), expected)
+                self.assertEqual(code["weekday_capacity_slack"](plan, 49.5, now, calendar), expected - 1)
+        task["due"] = "20261102T060000Z"
+        now = dt.datetime(2026, 11, 1, 5, tzinfo=UTC)  # DST ends during this 25-hour day.
+        self.assertEqual(code["available_project_hours"](plan, 49.5, now, {}), 8.25)
+        self.assertAlmostEqual(code["available_project_hours"](plan, 49.5, now), 25 * 49.5 / 168)
+
     def test_calendar_reschedules_without_a_task_change(self):
         tasks = [
             {"uuid": "A", "status": "pending", "due": "20260918T210000Z"},
@@ -353,7 +399,7 @@ class CalendarTests(unittest.TestCase):
         slack = help_code["weekday_capacity_slack"](
             plan, 24, dt.datetime(2026, 9, 18, 21, tzinfo=UTC), calendar,
         )
-        self.assertEqual(slack, 8)  # Three available days at 4h, minus 4h remaining.
+        self.assertEqual(slack, 4)  # Friday remainder and Tuesday partial day total one workday.
 
 
 if __name__ == "__main__":

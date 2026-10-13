@@ -125,6 +125,107 @@ class RollTests(unittest.TestCase):
             self.assertEqual(roll.main(), 0)
             modify.assert_called_once_with("task", "B", ["roll:", "roll_offset:"])
 
+    def test_release_retained_due_is_used_by_descendants(self):
+        for changed in ("B", "X", "A"):
+            for reverse in (False, True):
+                tasks = [
+                    {"uuid": "A", "status": "completed", "end": "20260102T120000Z",
+                     "modified": "20260103T120000Z"},
+                    {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D",
+                     "due": "20260110T120000Z", "roll_manual": "yes"},
+                    {"uuid": "C", "status": "pending", "roll": "B", "roll_offset": "P1D",
+                     "due": "20260111T120000Z"},
+                ]
+                if reverse:
+                    tasks.reverse()
+                with self.subTest(changed=changed, reverse=reverse), patch(
+                    "sys.stdin", io.StringIO(json.dumps({"uuid": changed}))
+                ), patch.object(roll, "export_tasks", return_value=tasks), patch.object(
+                    roll, "apply_modifications"
+                ) as modify:
+                    self.assertEqual(roll.main(), 0)
+                writes = {call.args[1]: call.args[2] for call in modify.call_args_list}
+                self.assertEqual(writes["B"], ["roll:", "roll_offset:", "roll_manual:"])
+                self.assertFalse(any(value.startswith("due:") for value in writes.get("C", [])))
+
+    def test_roll_refreshes_crunch_after_due_change(self):
+        tasks = [
+            {"uuid": "A", "status": "pending", "due": "20200101T120000Z"},
+            {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D",
+             "due": "20990101T120000Z", "remaining": "PT1H", "progress": 0,
+             "crunch": "MED", "crunch_display": "old"},
+        ]
+        with patch("sys.stdin", io.StringIO(json.dumps({"uuid": "A"}))), patch.object(
+            roll, "export_tasks", return_value=tasks
+        ), patch.object(roll, "crunch_enabled", return_value=True), patch.object(
+            roll, "apply_modifications"
+        ) as modify:
+            self.assertEqual(roll.main(), 0)
+        changes = modify.call_args.args[2]
+        self.assertIn("due:20200102T120000Z", changes)
+        self.assertIn("crunch:CRITICAL", changes)
+        self.assertIn("crunch_display:CRITICAL", changes)
+
+    def test_roll_crunch_guard_and_score_clears(self):
+        for configured in (False, True):
+            tasks = [
+                {"uuid": "A", "status": "pending", "due": "20990101T120000Z"},
+                {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D",
+                 "due": "20200101T120000Z", "remaining": "PT4H", "progress": 25,
+                 "crunch": "HIGH", "crunch_display": "old"},
+            ]
+            with self.subTest(configured=configured), patch(
+                "sys.stdin", io.StringIO(json.dumps({"uuid": "A"}))
+            ), patch.object(roll, "export_tasks", return_value=tasks), patch.object(
+                roll, "crunch_enabled", return_value=configured
+            ) as enabled, patch.object(roll, "apply_modifications") as modify:
+                self.assertEqual(roll.main(), 0)
+                changes = modify.call_args.args[2]
+                self.assertIn("due:20990102T120000Z", changes)
+                if configured:
+                    self.assertIn("crunch:", changes)
+                    self.assertIn("crunch_display:", changes)
+                else:
+                    self.assertFalse(any(value.startswith("crunch") for value in changes))
+                enabled.assert_called_once()
+
+    def test_chain_disabled_hook_write_refreshes_crunch(self):
+        command = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        task = {"uuid": "B", "due": "20200101T120000Z", "remaining": "PT1H",
+                "progress": 0, "crunch": "MED", "crunch_display": "old"}
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled), patch.object(command["subprocess"], "run") as run:
+                command["modify_task"]("task", task, hooks=False, score_enabled=enabled)
+            arguments = run.call_args.args[0]
+            self.assertIn("rc.hooks=0", arguments)
+            if enabled:
+                self.assertIn("crunch:CRITICAL", arguments)
+                self.assertIn("crunch_display:CRITICAL", arguments)
+            else:
+                self.assertFalse(any(value.startswith("crunch") for value in arguments))
+
+    def test_rock_checks_nested_branches_and_fixed_boundaries(self):
+        command = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        for fixed in (None, "checkpoint", "finish-line"):
+            tasks = [
+                {"uuid": "A", "status": "pending", "due": "20261012T160000Z"},
+                {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D"},
+                {"uuid": "C", "status": "pending", "roll": "B", "roll_offset": "P1D",
+                 "roll_fixed": "finish-line", "due": "20261020T160000Z"},
+                {"uuid": "D", "status": "pending", "roll": "B", "roll_offset": "P3D",
+                 "due": "20261016T160000Z"},
+            ]
+            if fixed:
+                tasks[-1]["roll_fixed"] = fixed
+            plan = command["rock_plan"](tasks, "C")
+            with self.subTest(fixed=fixed):
+                if fixed:
+                    self.assertEqual(plan["warnings"], [])
+                else:
+                    self.assertIn("other active branch", plan["warnings"][0])
+                    with self.assertRaisesRegex(ValueError, "refuses"):
+                        command["apply_rock_plan"](plan, "task")
+
     def test_zero_and_negative_slack(self):
         base = {"uuid": "A", "status": "pending", "due": "20260101T000000Z"}
         zero = {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "1d", "roll_fixed": "checkpoint", "due": "20260102T000000Z"}
@@ -245,6 +346,7 @@ class RollTests(unittest.TestCase):
     def test_phoenix_count_repeats_then_stops(self):
         for count, expected in (
             (2, ("due:20260102T133000Z", "wait:20260102T133000Z", "phoenix:PT90M", "phoenix_count:1", "phoenix_wait:yes", "--", "Laundry")),
+            (3.0, ("due:20260102T133000Z", "wait:20260102T133000Z", "phoenix:PT90M", "phoenix_count:2", "phoenix_wait:yes", "--", "Laundry")),
             (1, ("due:20260102T133000Z", "wait:20260102T133000Z", "--", "Laundry")),
             (0, None),
             (1.5, None),
@@ -466,11 +568,11 @@ class RollTests(unittest.TestCase):
         self.assertNotIn("root", plan)
         self.assertIn("Checkpoint", plan["warnings"][0])
         self.assertIn("CHECKPOINT: 1 Check fixed 2026-09-16", roll_help["rock_status"](plan))
-        self.assertIn("full-path capacity is unavailable", roll_help["render_rock_plan"](plan))
+        self.assertIn("spare work hours for the full path are unavailable", roll_help["render_rock_plan"](plan))
         self.assertIn("CHECKPOINT:", roll_help["render_chain_browser"](tasks))
         detail = roll_help["render_chain_details"](tasks, 1)
-        self.assertIn("capacity —\nCHECKPOINT:", detail)
-        self.assertIn("Backward planning stops here; full-path capacity is unavailable.", detail)
+        self.assertIn("Spare work time: —", detail)
+        self.assertIn("Backward planning stops here; spare work hours for the full path are unavailable.", detail)
         with self.assertRaisesRegex(ValueError, "blocked"):
             roll_help["apply_rock_plan"](plan, "task")
 
@@ -525,7 +627,7 @@ class RollTests(unittest.TestCase):
         slack = roll_help["weekday_capacity_slack"](
             plan, 70, dt.datetime(2026, 9, 18, tzinfo=UTC)
         )
-        self.assertEqual(slack, 10)
+        self.assertAlmostEqual(slack, 20 / 3)
 
     def test_chain_browser_shows_capacity_and_path_details(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -537,13 +639,15 @@ class RollTests(unittest.TestCase):
         self.assertIn("ROOT", output)
         self.assertIn("TASKS", output)
         self.assertIn("START", output)
-        self.assertIn("CAPACITY", output)
+        self.assertIn("SPARE WORK HOURS", output)
         self.assertIn("h  READY", output)
         detail = roll_help["render_chain_details"](tasks, 1, capacities={"posek.ch": 70})
         self.assertIn("CHAIN 1", detail)
         self.assertIn("Root", detail)
         self.assertIn("Finish", detail)
         self.assertIn("ROCK: deadline", detail)
+        self.assertIn("Available project work time:", detail)
+        self.assertIn("Spare work time:", detail)
 
     def test_roll_view_hides_rock_finish_line(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))

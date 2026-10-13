@@ -14,6 +14,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from roll_calendar import format_work_duration, limited_dates, load_calendar, move_work, work_duration
+from roll_crunch import crunch_enabled, crunch_modifications
 
 UTC = dt.timezone.utc
 ROLLABLE_STATUSES = {"pending", "waiting"}
@@ -372,9 +373,36 @@ def main() -> int:
             and task.get("uuid")
         }
         tasks = export_tasks(command)
-        offset_changes = refresh_offsets(tasks, command, calendar)
-        calculated, slack_hours, warnings = calculate_schedule(tasks, calendar)
         by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
+        schedule_tasks = [dict(task) for task in tasks]
+        retained_links: set[str] = set()
+        for task in schedule_tasks:
+            uuid = str(task.get("uuid") or "")
+            predecessor_uuid = str(task.get("roll") or "")
+            predecessor = by_uuid.get(predecessor_uuid)
+            if (
+                task.get("status") in ROLLABLE_STATUSES
+                and not task.get("roll_fixed")
+                and predecessor is not None
+                and predecessor.get("status") == "completed"
+                and parse_task_date(predecessor.get("end")) is not None
+                and parse_duration(predecessor_uuid) is None
+                and parse_duration(task.get("roll_offset")) is not None
+                and not (
+                    predecessor_uuid in changed_uuids
+                    and predecessor.get("end") == predecessor.get("modified")
+                    and uuid not in changed_uuids
+                )
+            ):
+                # Descendants must use the retained due date, not a discarded projection.
+                retained_links.add(uuid)
+                task.pop("roll", None)
+                task.pop("roll_offset", None)
+        offset_changes = refresh_offsets(schedule_tasks, command, calendar)
+        calculated, slack_hours, warnings = calculate_schedule(schedule_tasks, calendar)
+        for uuid, offset in offset_changes.items():
+            by_uuid[uuid]["roll_offset"] = offset
+        score_enabled = None
         changed_due_dates = 0
         changed_slack_values = 0
         released_links = 0
@@ -410,13 +438,13 @@ def main() -> int:
                 warnings.append(f"Phoenix {uuid[:8]}: needs a positive duration and completed task data.")
                 continue
             count = task.get("phoenix_count")
-            if count is not None and (not isinstance(count, int) or count < 0):
+            if count is not None and (type(count) not in (int, float) or count < 0 or count % 1):
                 warnings.append(f"Phoenix {uuid[:8]}: phoenix_count must be a nonnegative whole number.")
                 continue
             if count == 0:
                 continue
             try:
-                create_phoenix_task(command, task, end + delay, count)
+                create_phoenix_task(command, task, end + delay, int(count) if count is not None else None)
                 phoenix_created += 1
             except Exception as exc:
                 warnings.append(f"Phoenix {uuid[:8]} creation failed: {exc}")
@@ -428,7 +456,7 @@ def main() -> int:
             due_changed = slack_changed = link_released = False
             predecessor_uuid = str(task.get("roll") or "")
             predecessor = by_uuid.get(predecessor_uuid)
-            release = (
+            release = uuid in retained_links or (
                 uuid in calculated
                 and predecessor is not None
                 and predecessor.get("status") == "completed"
@@ -479,6 +507,14 @@ def main() -> int:
             if not modifications:
                 continue
             try:
+                if due_changed:
+                    final_task = dict(task, due=format_task_date(calculated[uuid]))
+                    score_changes = crunch_modifications(final_task)
+                    if score_changes:
+                        if score_enabled is None:
+                            score_enabled = crunch_enabled(command)
+                        if score_enabled:
+                            modifications.extend(score_changes)
                 apply_modifications(command, uuid, modifications)
                 changed_due_dates += int(due_changed)
                 changed_slack_values += int(slack_changed)

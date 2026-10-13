@@ -54,3 +54,13 @@ The resulting `crunch` value is:
 - unset otherwise
 
 Crunch scoring has no state-based or `+optional` reduction.
+
+## Automatic schedule changes
+
+Roll and chain building refresh `crunch` and `crunch_display` when they change
+`due` or `remaining` with hooks disabled. They use the same calculator as the
+Crunch hook and write the score in the same task modification. Both score UDAs
+must be configured as strings; otherwise automated writes leave those fields
+alone. This does not enable other hooks or record a manual postponement.
+
+Scores still refresh on task changes, not continuously as time passes.
