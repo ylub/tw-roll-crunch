@@ -1056,6 +1056,42 @@ def render_chains(
     return "\n".join(lines) + "\n"
 
 
+def render_fixed_timing(
+    path: list[dict[str, Any]], calendar: dict[dt.date, float] | None,
+) -> list[str]:
+    lines: list[str] = []
+    projected = parse_date(path[0].get("due"))
+    for task in path[1:]:
+        offset = parse_duration(task.get("roll_offset"))
+        if projected is not None and offset is not None:
+            projected = (move_work(projected, work_duration(task.get("roll_offset"), offset), calendar)
+                         if calendar is not None else projected + offset)
+        else:
+            projected = None
+        if kind := milestone_kind(task):
+            fixed = parse_date(task.get("due"))
+            lines.extend(("", f"{kind.upper()}: {task_label(task)}"))
+            for label, value in (("Projected arrival", projected), ("Fixed deadline", fixed)):
+                local = value.astimezone() if value is not None else None
+                lines.append(f"  {label}: {local.strftime('%Y-%m-%d %H:%M %Z') if local else 'unavailable'}")
+            if projected is not None and fixed is not None:
+                gap = fixed - projected
+                seconds = abs(int(gap.total_seconds()))
+                days, seconds = divmod(seconds, 86400)
+                hours, seconds = divmod(seconds, 3600)
+                minutes, seconds = divmod(seconds, 60)
+                duration = f"{days}d {hours}h {minutes}m" + (f" {seconds}s" if seconds else "")
+                timing = f"{duration} {'early' if gap.total_seconds() > 0 else 'late'}" if gap else "on time (0d 0h 0m)"
+                lines.append(f"  Deadline gap: {timing}")
+            else:
+                lines.append("  Deadline gap: unavailable (missing due date or invalid Roll gap)")
+            projected = fixed
+    if lines:
+        lines[0:0] = ["", "FIXED-DATE TIMING", "Projection follows Roll gaps; each fixed date anchors the next segment.",
+                      "Deadline gaps are elapsed time (1d = 24h), including nights and days off."]
+    return lines
+
+
 def render_chain_details(
     tasks: list[dict[str, Any]], number: int, theme: dict[str, str] | None = None,
     capacities: dict[str, float | None] | None = None,
@@ -1090,6 +1126,7 @@ def render_chain_details(
             f"{(due.astimezone() if calendar is not None else due).strftime('%Y-%m-%d %H:%M') if due else '—':<16}  {short_duration(task.get('remaining')):<10}  "
             f"{short_duration(task.get('roll_offset')):<8}  {marker}"
         )
+    lines.extend(render_fixed_timing(path, calendar))
     if milestone_kind(leaf) == "finish-line":
         plan = rock_plan(tasks, str(leaf.get("uuid")), calendar)
         now = now or dt.datetime.now(dt.timezone.utc)
@@ -1106,8 +1143,9 @@ def render_chain_details(
             lines.extend(("", f"ROCK: deadline {deadline.date() if deadline else '—'}  {status}"))
         if deadline:
             seconds = max(0, int((deadline - now).total_seconds()))
+            days, seconds = divmod(seconds, 86400)
             hours, minutes = divmod(seconds // 60, 60)
-            lines.append(f"Time until deadline: {hours}h {minutes}m")
+            lines.append(f"Time until deadline: {days}d {hours}h {minutes}m")
         work = f"{available:.2f}h" if available is not None else "—"
         lines.extend((f"Available project work time: {work}", f"Spare work time: {capacity}"))
     return "\n".join(lines) + "\n"

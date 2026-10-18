@@ -181,6 +181,11 @@ spread evenly across all seven days.
 The `SPARE WORK HOURS` column is a feasibility signal; it does not change `R_mark`.
 `task chain NUMBER` shows time until the deadline, available project work time,
 and spare work time. Time until the deadline includes nights and days off.
+Its fixed-date timing block shows projected arrival, fixed deadline, and the
+early/late gap for each linked checkpoint or finish-line. Projection follows
+Roll offsets and the work calendar; each fixed date anchors the next segment.
+Deadline gaps count elapsed time (one day is 24 hours), including nights and
+days off. These gaps are separate from spare project work hours.
 Project work time is an estimate based on your weekly allocation; it does not
 subtract work from competing chains.
 

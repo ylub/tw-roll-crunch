@@ -597,6 +597,51 @@ class RollTests(unittest.TestCase):
         plan = roll_help["rock_plan"](tasks, "2")
         self.assertIn("WARN: Checkpoint 1 Write fixed 2026-10-08 01:00 UTC; Rock needs it by 2026-10-08 00:00 UTC", roll_help["rock_status"](plan))
 
+    def test_fixed_timing_reports_each_segment_without_changing_tasks(self):
+        command = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "due": "20261001T100000Z"},
+            {"id": 2, "uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D",
+             "roll_fixed": "checkpoint", "due": "20261004T123000Z"},
+            {"id": 3, "uuid": "C", "status": "pending", "roll": "B", "roll_offset": "P1D",
+             "roll_fixed": "finish-line", "due": "20261005T123000Z"},
+        ]
+        before = json.dumps(tasks)
+        output = command["render_chain_details"](tasks, 1)
+        self.assertIn("FIXED-DATE TIMING", output)
+        self.assertIn("Deadline gap: 2d 2h 30m early", output)
+        self.assertIn("Deadline gap: on time (0d 0h 0m)", output)
+        self.assertEqual(output.count("Projected arrival:"), 2)
+        self.assertEqual(before, json.dumps(tasks))
+        tasks[2]["due"] = "20261005T120000Z"
+        self.assertIn("Deadline gap: 0d 0h 30m late", command["render_chain_details"](tasks, 1))
+        tasks[1]["roll_offset"] = "bad"
+        output = command["render_chain_details"](tasks, 1)
+        self.assertIn("Deadline gap: unavailable", output)
+        self.assertIn("Deadline gap: 0d 0h 30m late", output)
+        tasks[1].pop("due")
+        self.assertEqual(command["render_chain_details"](tasks, 1).count("Deadline gap: unavailable"), 2)
+
+    def test_roll_path_reports_checkpoints_without_inventing_a_deadline(self):
+        command = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "due": "20261001T100000Z"},
+            {"id": 2, "uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D",
+             "roll_fixed": "checkpoint", "due": "20261004T123000Z"},
+            {"id": 3, "uuid": "C", "status": "pending", "roll": "B", "roll_offset": "P1D",
+             "due": "20261005T123000Z"},
+        ]
+        for kind in ("checkpoint", "vacation", "off", "night"):
+            with self.subTest(kind=kind):
+                tasks[1]["roll_fixed"] = kind
+                output = command["render_chain_details"](tasks, 1)
+                self.assertIn("Deadline gap: 2d 2h 30m early", output)
+                self.assertNotIn("ROCK:", output)
+                self.assertNotIn("Time until deadline:", output)
+                self.assertEqual(output.count("Projected arrival:"), 1)
+        tasks[1].pop("roll_fixed")
+        self.assertNotIn("FIXED-DATE TIMING", command["render_chain_details"](tasks, 1))
+
     def test_rock_requires_a_linked_finish_line(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
         plan = roll_help["rock_plan"]([{

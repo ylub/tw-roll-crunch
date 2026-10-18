@@ -192,6 +192,27 @@ class CalendarTests(unittest.TestCase):
             plan, 49.5, dt.datetime(2026, 9, 25, 13, tzinfo=UTC), {half: 0.5},
         ), -0.75)  # 3h15 available, less 4h remaining.
 
+    def test_fixed_timing_uses_work_calendar_and_local_dates(self):
+        code = runpy.run_path(str(ROOT / "task_roll_help"))
+        tasks = [
+            {"id": 1, "uuid": "A", "status": "pending", "due": "20261009T213000Z"},
+            {"id": 2, "uuid": "B", "status": "pending", "roll": "A", "roll_offset": "PT1H",
+             "roll_fixed": "checkpoint", "due": "20261012T150000Z"},
+            {"id": 3, "uuid": "C", "status": "pending", "roll": "B", "roll_offset": "PT1H",
+             "roll_fixed": "finish-line", "due": "20261012T160000Z"},
+        ]
+        calendar = {dt.date(2026, 10, 11): 0}
+        output = code["render_chain_details"](tasks, 1, calendar=calendar)
+        self.assertIn("Projected arrival: 2026-10-12 09:15 CDT", output)
+        self.assertIn("Fixed deadline: 2026-10-12 10:00 CDT", output)
+        self.assertIn("Deadline gap: 0d 0h 45m early", output)
+        self.assertIn("Deadline gap: on time (0d 0h 0m)", output)
+        tasks[0]["due"] = "20261030T213000Z"
+        tasks[1]["due"] = "20261101T160000Z"
+        output = code["render_chain_details"](tasks[:2], 1, calendar={})
+        self.assertIn("Projected arrival: 2026-11-01 09:15 CST", output)
+        self.assertIn("Deadline gap: 0d 0h 45m early", output)
+
     def test_project_capacity_prorates_partial_days_and_detail_labels(self):
         code = runpy.run_path(str(ROOT / "task_roll_help"))
         tasks = [
@@ -206,7 +227,7 @@ class CalendarTests(unittest.TestCase):
         self.assertAlmostEqual(code["available_project_hours"](plan, 18, now, {}), available)
         self.assertAlmostEqual(code["weekday_capacity_slack"](plan, 18, now, {}), available - 7 / 3)
         detail = code["render_chain_details"](tasks, 1, capacities={"oraysa": 18}, calendar={}, now=now)
-        self.assertIn("Time until deadline: 93h 16m", detail)
+        self.assertIn("Time until deadline: 3d 21h 16m", detail)
         self.assertIn("Available project work time: 8.01h", detail)
         self.assertIn("Spare work time: +5.67h", detail)
         for hour in (0, 12):  # Overnight and before opening count the same work windows.
