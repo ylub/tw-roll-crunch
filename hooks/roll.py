@@ -358,6 +358,37 @@ def create_phoenix_task(command: str, task: dict[str, Any], due: dt.datetime, co
     task_run(command, *arguments)
 
 
+def prepare_schedule(tasks: list[dict[str, Any]], changed_uuids: set[str]) -> tuple[list[dict[str, Any]], set[str]]:
+    """Keep retained dates when completed predecessors release their links."""
+    by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
+    schedule_tasks = [dict(task) for task in tasks]
+    retained_links: set[str] = set()
+    for task in schedule_tasks:
+        uuid = str(task.get("uuid") or "")
+        predecessor_uuid = str(task.get("roll") or "")
+        predecessor = by_uuid.get(predecessor_uuid)
+        if (
+            task.get("status") in ROLLABLE_STATUSES
+            and not task.get("roll_fixed")
+            and predecessor is not None
+            and predecessor.get("status") == "completed"
+            and parse_task_date(predecessor.get("end")) is not None
+            and parse_duration(predecessor_uuid) is None
+            and parse_duration(task.get("roll_offset")) is not None
+            and not (
+                predecessor_uuid in changed_uuids
+                and predecessor.get("end") == predecessor.get("modified")
+                and uuid not in changed_uuids
+            )
+        ):
+            # Descendants must use the retained due date, not a discarded projection.
+            retained_links.add(uuid)
+            task.pop("roll", None)
+            task.pop("roll_offset", None)
+    return schedule_tasks, retained_links
+
+
+
 def main() -> int:
     input_data = sys.stdin.read()
     command = task_command()
@@ -374,30 +405,7 @@ def main() -> int:
         }
         tasks = export_tasks(command)
         by_uuid = {str(task["uuid"]): task for task in tasks if task.get("uuid")}
-        schedule_tasks = [dict(task) for task in tasks]
-        retained_links: set[str] = set()
-        for task in schedule_tasks:
-            uuid = str(task.get("uuid") or "")
-            predecessor_uuid = str(task.get("roll") or "")
-            predecessor = by_uuid.get(predecessor_uuid)
-            if (
-                task.get("status") in ROLLABLE_STATUSES
-                and not task.get("roll_fixed")
-                and predecessor is not None
-                and predecessor.get("status") == "completed"
-                and parse_task_date(predecessor.get("end")) is not None
-                and parse_duration(predecessor_uuid) is None
-                and parse_duration(task.get("roll_offset")) is not None
-                and not (
-                    predecessor_uuid in changed_uuids
-                    and predecessor.get("end") == predecessor.get("modified")
-                    and uuid not in changed_uuids
-                )
-            ):
-                # Descendants must use the retained due date, not a discarded projection.
-                retained_links.add(uuid)
-                task.pop("roll", None)
-                task.pop("roll_offset", None)
+        schedule_tasks, retained_links = prepare_schedule(tasks, changed_uuids)
         offset_changes = refresh_offsets(schedule_tasks, command, calendar)
         calculated, slack_hours, warnings = calculate_schedule(schedule_tasks, calendar)
         for uuid, offset in offset_changes.items():

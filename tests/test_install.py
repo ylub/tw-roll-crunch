@@ -3,6 +3,9 @@
 import datetime as dt
 import json
 import os
+import pty
+import select
+import time
 from pathlib import Path
 import shutil
 import subprocess
@@ -47,6 +50,126 @@ class InstalledTests(unittest.TestCase):
     def add(self, description, *fields):
         self.run_command(TASK, "add", description, *fields)
         return next(task for task in self.tasks() if task["description"] == description)
+
+    def confirmed_command(self, *arguments, shell_line=None):
+        master, slave = pty.openpty()
+        process = subprocess.Popen(arguments, env=self.env, cwd=self.base,
+                                   stdin=slave, stdout=slave, stderr=slave)
+        os.close(slave)
+        output = b""
+        deadline = time.monotonic() + 15
+        answered = False
+        exited = False
+        if shell_line:
+            os.write(master, (shell_line + "\n").encode())
+        try:
+            while time.monotonic() < deadline:
+                readable, _, _ = select.select([master], [], [], 0.1)
+                if readable:
+                    try:
+                        chunk = os.read(master, 65536)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    output += chunk
+                    if not answered and b"Apply these changes?" in output:
+                        os.write(master, b"y\n")
+                        answered = True
+                    if shell_line and not exited and b"APPLIED:" in output:
+                        os.write(master, b"exit\n")
+                        exited = True
+                elif process.poll() is not None:
+                    break
+            self.assertTrue(answered, output.decode())
+            self.assertEqual(process.wait(timeout=2), 0, output.decode())
+            return output.decode()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            os.close(master)
+
+
+    def test_installed_chain_edit_preview_and_confirm(self):
+        self.install()
+        root = self.add("Root", "due:2099-01-01")
+        child = self.add("Child", "due:2099-01-03", "remaining:1h",
+                         f"roll:{root['uuid']}", "roll_offset:P2D")
+        finish = self.add("Finish", "due:2099-01-10", f"roll:{child['uuid']}",
+                          "roll_offset:P2D", "roll_fixed:finish-line")
+        before = self.tasks()
+        preview = self.run_command(TASK, "chain", "1", "modify", "roll_offset:P1D")
+        self.assertIn("Preview only", preview.stdout)
+        self.assertEqual(self.tasks(), before)
+        output = self.confirmed_command(TASK, "chain", "1", "modify", "roll_offset:P1D")
+        self.assertIn("APPLIED: 2 tasks", output)
+        tasks = {task["uuid"]: task for task in self.tasks()}
+        self.assertNotIn("roll_manual", tasks[root["uuid"]])
+        self.assertTrue(tasks[child["uuid"]]["due"].startswith("20990102"))
+        for uuid in (child["uuid"], finish["uuid"]):
+            self.assertEqual(tasks[uuid]["roll_manual"], "yes")
+        self.assertEqual(tasks[finish["uuid"]]["due"], finish["due"])
+        output = self.confirmed_command(TASK, "chain", "1", "modify", "priority:H", "+bulk")
+        self.assertIn("APPLIED: 3 tasks", output)
+        self.assertTrue(all(task.get("priority") == "H" and "bulk" in task.get("tags", [])
+                            for task in self.tasks()))
+        output = self.confirmed_command(
+            TASK, "chain", "1", "modify", "progress:25.5", "project:bulk.demo",
+            "remaining:2h", "phoenix:90m", "phoenix_wait:yes", "phoenix_count:2",
+        )
+        self.assertIn("APPLIED: 3 tasks", output)
+        for task in self.tasks():
+            self.assertEqual(task["progress"], 25.5)
+            self.assertEqual(task["project"], "bulk.demo")
+            self.assertEqual(task["remaining"], "PT2H")
+            self.assertEqual(task["phoenix"], "PT1H30M")
+            self.assertEqual(task["phoenix_wait"], "yes")
+            self.assertEqual(task["phoenix_count"], 2)
+        rejected = self.run_command(TASK, "chain", "1", "modify", "--apply", check=False)
+        self.assertIn("Unsupported or duplicate modification: --apply", rejected.stderr)
+
+
+    def test_track_shell_confirms_installed_chain_edit(self):
+        self.install()
+        root = self.add("Root", "due:2099-01-01")
+        child = self.add("Child", "due:2099-01-03", f"roll:{root['uuid']}", "roll_offset:P2D")
+        shell_config = self.base / "shell.toml"
+        shell_config.write_text('panels = []\n[theme]\ncolor = "never"\n')
+        self.env["TASK_WRAPPER_REAL_TASK"] = TASK
+        for project, prefix in (("time", ""), ("time", "task "), ("ttt", ""), ("ttt", "task ")):
+            project_path = ROOT.parent / project
+            if not (project_path / "track_shell.py").is_file():
+                continue
+            with self.subTest(project=project):
+                script = (f"import sys; from pathlib import Path; sys.path.insert(0, {str(project_path)!r}); "
+                          f"import track_shell; sys.exit(track_shell.main(Path({str(shell_config)!r})))")
+                output = self.confirmed_command(
+                    os.sys.executable, "-B", "-c", script,
+                    shell_line=prefix + "chain 1 modify roll_offset:P1D remaining:2h progress:50 project:bulk.demo priority:H +bulk phoenix:90m phoenix_wait:yes phoenix_count:2",
+                )
+                self.assertIn("APPLIED: 1 tasks", output)
+                edited = next(task for task in self.tasks() if task["uuid"] == child["uuid"])
+                self.assertTrue(edited["due"].startswith("20990102"))
+                self.assertEqual(edited["roll_manual"], "yes")
+                self.assertEqual(edited["remaining"], "PT2H")
+                self.assertEqual(edited["progress"], 50)
+                self.assertEqual(edited["project"], "bulk.demo")
+                self.assertEqual(edited["priority"], "H")
+                self.assertIn("bulk", edited["tags"])
+                self.assertEqual(edited["phoenix"], "PT1H30M")
+                self.assertEqual(edited["phoenix_wait"], "yes")
+                self.assertEqual(edited["phoenix_count"], 2)
+                output = self.confirmed_command(
+                    os.sys.executable, "-B", "-c", script,
+                    shell_line=prefix + "chain 1 modify roll_manual: remaining: progress: project: priority: -bulk phoenix: phoenix_wait: phoenix_count:",
+                )
+                self.assertIn("APPLIED: 1 tasks", output)
+                edited = next(task for task in self.tasks() if task["uuid"] == child["uuid"])
+                for field in ("roll_manual", "remaining", "progress", "project", "priority", "phoenix", "phoenix_wait", "phoenix_count"):
+                    self.assertNotIn(field, edited)
+                self.assertNotIn("bulk", edited.get("tags", []))
+
 
     def test_installed_roll_refreshes_scores_and_aliases(self):
         self.install()

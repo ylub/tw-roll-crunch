@@ -79,6 +79,7 @@ install -m 0755 hooks/roll.py "$HOOK_DIR/on-exit-roll.py"
 install -m 0644 roll_calendar.py "${TASKDATA:-$HOME/.task}/roll_calendar.py"
 install -m 0644 roll_crunch.py "${TASKDATA:-$HOME/.task}/roll_crunch.py"
 mkdir -p "$HOME/.local/bin"
+install -m 0644 hooks/roll.py "$HOME/.local/bin/roll_schedule.py"
 install -m 0755 task_roll_help "$HOME/.local/bin/task_roll_help"
 install -m 0644 roll_calendar.py "$HOME/.local/bin/roll_calendar.py"
 install -m 0644 roll_crunch.py "$HOME/.local/bin/roll_crunch.py"
@@ -104,7 +105,7 @@ select another file. The supported `include` syntax is documented in the
 
 To uninstall, remove the three installed hook paths, the two installed
 `roll_calendar.py` copies, the two installed `roll_crunch.py` copies,
-`$HOME/.local/bin/task_roll_help`,
+`$HOME/.local/bin/task_roll_help`, `$HOME/.local/bin/roll_schedule.py`,
 `$HOME/.local/bin/task_rock`, `$HOME/.local/bin/task_chain`,
 `$HOME/.local/bin/task_chains`, and the `include` line you added to your
 Taskwarrior config. Removing hooks does not delete task data.
@@ -291,6 +292,34 @@ and status. On a flexible path, `DEADLINE` is the leaf's current rolling due
 date, not a fixed finish-line. `task chain NUMBER` shows every task in that
 path. Capacity is `—` for flexible paths. `task chains view` remains the
 original compact chain summary without numbering or capacity.
+
+Bulk edits use the same preview and confirmation in a terminal or `track -i`:
+
+```sh
+task chain 2 modify remaining:2h progress:25 priority:H +focus
+task chain 2 modify roll_offset:1d
+task chain 2 modify phoenix:90m phoenix_wait:yes phoenix_count:2
+```
+
+Supported fields: `roll_offset`, `roll_manual`, `remaining`, `progress`,
+`project`, `priority`, `phoenix`, `phoenix_wait`, and `phoenix_count`, plus
+`+tag` and `-tag`. Progress accepts 0–100; Phoenix count accepts nonnegative
+whole numbers. Empty values clear fields except `roll_offset`, which requires
+a positive duration. Phoenix duration must also be positive when set.
+`phoenix_wait` accepts `yes`, `no`, or empty. Phoenix settings affect future
+copies after completion; they do not create copies during the bulk edit.
+Clearing `remaining` removes that estimate and its Crunch score.
+
+Spacing edits skip an unlinked root; other edits apply to the full path.
+An explicit offset sets `roll_manual:yes`; use `roll_manual:` to resume
+automatic spacing. Preview warns about tasks shared with other paths and
+preserves fixed dates. Only confirm after checking the selected tasks.
+Noninteractive commands preview without writing. Chain numbers can change;
+the confirmed operation retains UUIDs and rejects changed scheduling inputs.
+Dates, dependencies, lifecycle fields, tracking fields, and computed scores
+are not accepted as bulk modifications. In `track -i`, `chain ...` shorthand
+also works; use `task chain NUMBER modify ...` when a program named `chain`
+exists on PATH.
 
 Show flexible link details and offsets:
 

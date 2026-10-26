@@ -28,7 +28,7 @@ for target in roll_calendar.py roll_crunch.py; do
     }
 done
 
-for target in task_roll_help task_rock task_chain task_chains roll_calendar.py roll_crunch.py; do
+for target in task_roll_help task_rock task_chain task_chains roll_calendar.py roll_crunch.py roll_schedule.py; do
     [ ! -e "$bin/$target" ] && [ ! -L "$bin/$target" ] || {
         echo "Refusing to replace existing command: $bin/$target" >&2
         exit 1
@@ -40,6 +40,7 @@ install -m 644 "$root/roll_calendar.py" "$data/roll_calendar.py"
 install -m 644 "$root/roll_crunch.py" "$data/roll_crunch.py"
 install -m 755 "$root/hooks/crunch.py" "$hooks/on-modify.crunch.py"
 ln -s on-modify.crunch.py "$hooks/on-add.crunch.py"
+install -m 644 "$root/hooks/roll.py" "$bin/roll_schedule.py"
 install -m 755 "$root/task_roll_help" "$bin/task_roll_help"
 install -m 644 "$root/roll_calendar.py" "$bin/roll_calendar.py"
 install -m 644 "$root/roll_crunch.py" "$bin/roll_crunch.py"

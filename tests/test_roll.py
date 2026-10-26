@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from hooks import roll
 
@@ -862,6 +862,172 @@ class RollTests(unittest.TestCase):
         due, slack, warnings = roll.calculate_schedule(tasks)
         self.assertEqual((due, slack), ({}, {}))
         self.assertTrue(any("invalid roll_fixed" in warning for warning in warnings))
+
+class ChainEditTests(unittest.TestCase):
+    def setUp(self):
+        self.command = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        self.tasks = [
+            {"id": 1, "uuid": "A", "description": "Root", "status": "pending", "due": "20260101T000000Z"},
+            {"id": 2, "uuid": "B", "description": "Child", "status": "pending", "roll": "A", "roll_offset": "P2D", "due": "20260103T000000Z", "remaining": "PT1H", "project": "demo"},
+            {"id": 3, "uuid": "C", "description": "Finish", "status": "pending", "roll": "B", "roll_offset": "P2D", "due": "20260110T000000Z", "roll_fixed": "finish-line"},
+        ]
+
+    def run_edit(self, modifications, current=None, answer="y", tty=True, result=None):
+        function = self.command["browser"]
+        with patch.object(roll, "export_tasks", side_effect=[self.tasks, current or self.tasks]), \
+             patch.object(roll, "task_run", return_value=Mock(stdout="stable configuration")), \
+             patch.dict(function.__globals__, load_calendar=lambda _: None), \
+             patch("sys.stdin", Mock(isatty=lambda: tty)), \
+             patch("builtins.input", return_value=answer), \
+             patch("subprocess.run", return_value=result or Mock(returncode=0, stdout="", stderr="")) as write, \
+             patch("sys.stdout", new_callable=io.StringIO) as output, \
+             patch("sys.stderr", new_callable=io.StringIO) as error:
+            code = function(["1", "modify", *modifications])
+        return code, output.getvalue(), error.getvalue(), write
+
+    def test_offsets_skip_root_keep_fixed_finish_and_warn_about_shared_tasks(self):
+        self.tasks.append({"id": 4, "uuid": "D", "description": "Branch", "status": "pending", "roll": "B", "roll_offset": "P1D"})
+        code, output, error, write = self.run_edit(["roll_offset:P1D"])
+        self.assertEqual(code, 0, error)
+        arguments = write.call_args.args[0]
+        self.assertEqual(arguments[4:7], ["B", "C", "modify"])
+        self.assertIn("roll_manual:yes", arguments)
+        self.assertIn("shared tasks", output)
+        self.assertIn("20260102T000000Z", output)
+        self.assertIn("20260110T000000Z (retained)", output)
+        self.assertIn("projected slack 168h", output)
+
+    def test_bulk_progress_and_phoenix_fields(self):
+        for modifications in (
+            ["progress:25.5"], ["progress:0"], ["progress:100"], ["progress:"],
+            ["phoenix:90m", "phoenix_wait:yes", "phoenix_count:2"],
+            ["phoenix:", "phoenix_wait:", "phoenix_count:"],
+            ["phoenix_wait:no", "phoenix_count:0"], ["remaining:"],
+        ):
+            with self.subTest(modifications=modifications):
+                code, _, error, write = self.run_edit(modifications)
+                self.assertEqual(code, 0, error)
+                self.assertEqual(write.call_args.args[0][4:8], ["A", "B", "C", "modify"])
+                for modification in modifications:
+                    field, _, value = modification.partition(":")
+                    if value and field in {"remaining", "phoenix"}:
+                        seconds = roll.parse_duration(value).total_seconds()
+                        modification = f"{field}:PT{seconds:g}S"
+                    self.assertIn(modification, write.call_args.args[0])
+
+    def test_duration_minutes_are_written_as_seconds_for_taskwarrior(self):
+        code, output, error, write = self.run_edit(["roll_offset:90m", "remaining:30m"])
+        self.assertEqual(code, 0, error)
+        self.assertIn("roll_offset:PT5400S", write.call_args.args[0])
+        self.assertIn("remaining:PT1800S", write.call_args.args[0])
+        self.assertIn("roll_offset:PT5400S", output)
+
+    def test_invalid_bulk_progress_and_phoenix_fields_never_write(self):
+        for modification in (
+            "progress:-1", "progress:101", "progress:nan", "progress:inf",
+            "progress:twenty", "phoenix:0h", "phoenix:-1h", "phoenix:bad",
+            "phoenix_wait:maybe", "phoenix_count:-1", "phoenix_count:1.5",
+        ):
+            with self.subTest(modification=modification):
+                code, _, _, write = self.run_edit([modification])
+                self.assertEqual(code, 1)
+                write.assert_not_called()
+
+    def test_completed_predecessor_release_preview_keeps_retained_root_date(self):
+        self.tasks[0].update(roll="Z", roll_offset="P1D")
+        self.tasks.append({"uuid": "Z", "status": "completed", "end": "20251201T000000Z"})
+        code, output, error, _ = self.run_edit(["roll_offset:P1D"])
+        self.assertEqual(code, 0, error)
+        self.assertIn("release completed predecessor links: A", output)
+        self.assertIn("20260101T000000Z (retained)", output)
+        self.assertIn("20260102T000000Z", output)
+
+    def test_number_changes_do_not_retarget(self):
+        import copy
+        current = copy.deepcopy(self.tasks)
+        current[0]["id"] = 9
+        current[0]["urgency"] = 99
+        current.extend([
+            {"id": 1, "uuid": "X", "status": "pending", "due": "20260101T000000Z"},
+            {"id": 2, "uuid": "Y", "status": "pending", "roll": "X", "roll_offset": "P1D"},
+        ])
+        code, _, error, write = self.run_edit(["priority:H"], current=current)
+        self.assertEqual(code, 0, error)
+        self.assertEqual(write.call_args.args[0][4:8], ["A", "B", "C", "modify"])
+
+    def test_completion_or_new_branch_aborts_before_write(self):
+        import copy
+        for change in ("completion", "branch"):
+            current = copy.deepcopy(self.tasks)
+            if change == "completion":
+                current[1]["status"] = "completed"
+            else:
+                current.append({"uuid": "D", "status": "pending", "roll": "B", "roll_offset": "P1D"})
+            code, _, error, write = self.run_edit(["roll_offset:P1D"], current=current)
+            self.assertEqual(code, 1)
+            self.assertIn("fresh preview", error)
+            write.assert_not_called()
+
+    def test_cancel_and_noninteractive_never_write(self):
+        for answer, tty in (("n", True), ("y", False)):
+            code, _, _, write = self.run_edit(["priority:H"], answer=answer, tty=tty)
+            self.assertEqual(code, 0)
+            write.assert_not_called()
+
+    def test_rejects_unsafe_fields_flags_and_invalid_values(self):
+        for arguments in (["roll:X"], ["status:completed"], ["track_session:X"], ["due:tomorrow"],
+                          ["rc.hooks=0"], ["--apply"], ["roll_offset:bad"], ["remaining:-1h"],
+                          ["roll_offset:P1D", "roll_manual:"], ["priority:H", "priority:L"], []):
+            with self.subTest(arguments=arguments):
+                code, _, _, write = self.run_edit(arguments)
+                self.assertEqual(code, 1)
+                write.assert_not_called()
+
+    def test_auto_spacing_and_remaining_use_existing_scheduler(self):
+        with patch.object(roll, "project_capacity", return_value=7):
+            code, output, error, write = self.run_edit(["remaining:2h", "roll_manual:"])
+        self.assertEqual(code, 0, error)
+        self.assertIn("20260103T000000Z", output)
+        self.assertIn("roll_manual:", write.call_args.args[0])
+
+    def test_configuration_change_aborts(self):
+        function = self.command["edit_chain"]
+        with patch.object(roll, "export_tasks", return_value=self.tasks), \
+             patch.object(roll, "task_run", side_effect=[Mock(stdout="before"), Mock(stdout="after")]), \
+             patch.dict(function.__globals__, load_calendar=lambda _: None), \
+             patch("sys.stdin", Mock(isatty=lambda: True)), patch("builtins.input", return_value="y"), \
+             patch("sys.stdout", new_callable=io.StringIO), \
+             self.assertRaisesRegex(ValueError, "fresh preview"):
+            function(1, ["roll_offset:P1D"])
+
+    def test_write_failure_reports_possible_partial_changes(self):
+        code, _, error, _ = self.run_edit(["priority:H"], result=Mock(returncode=1, stdout="", stderr="rejected"))
+        self.assertEqual(code, 1)
+        self.assertIn("some changes may have been written", error)
+
+    def test_roll_failure_does_not_claim_success(self):
+        code, output, error, _ = self.run_edit(
+            ["priority:H"], result=Mock(returncode=0, stdout="Roll warning: failure\n", stderr=""))
+        self.assertEqual(code, 1)
+        self.assertNotIn("APPLIED:", output)
+        self.assertIn("Edits were written", error)
+
+    def test_track_shell_routing_in_both_projects(self):
+        import importlib.util
+        for project in ("time", "ttt"):
+            path = Path(__file__).resolve().parents[2] / project / "track_shell.py"
+            if not path.exists():
+                continue
+            spec = importlib.util.spec_from_file_location("shell_" + project, path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            arguments = ["chain", "1", "modify", "roll_offset:P1D"]
+            for prefix in ([], ["task"]):
+                destination = module.destination(prefix + arguments)
+                self.assertEqual(destination[1], str(path.parent / "task_wrapper.py"))
+                self.assertEqual(destination[2:], arguments)
+
+
 
 if __name__ == "__main__":
     unittest.main()

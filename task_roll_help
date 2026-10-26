@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import itertools
 import json
@@ -35,6 +36,7 @@ Start here
   task roll chain ...     preview or apply a selected chain from UUID:description input
   task chain              list numbered active Roll paths
   task chain NUMBER       show every task in one path
+  task chain NUMBER modify FIELD:VALUE ...  preview and confirm bulk edits
   task chains view        original compact chain summary
   roll:<UUID>             child's predecessor
   roll_offset:<duration>  child's gap after predecessor (available time with calendar)
@@ -1171,8 +1173,175 @@ def show() -> int:
         return 1
 
 
+def chain_modifications(arguments: list[str]) -> list[str]:
+    """Accept only ordinary edits; never pass arbitrary Taskwarrior arguments."""
+    if not arguments:
+        raise ValueError("Specify at least one modification.")
+    fields = {}
+    tags = []
+    for argument in arguments:
+        if re.fullmatch(r"[+-][a-zA-Z0-9_][a-zA-Z0-9_.-]*", argument):
+            tags.append(argument)
+            continue
+        field, separator, value = argument.partition(":")
+        if not separator or field not in {
+            "roll_offset", "roll_manual", "remaining", "project", "priority",
+            "progress", "phoenix", "phoenix_wait", "phoenix_count",
+        } or field in fields:
+            raise ValueError(f"Unsupported or duplicate modification: {argument}")
+        if field in {"roll_offset", "remaining", "phoenix"} and (value or field == "roll_offset"):
+            duration = parse_duration(value)
+            if duration is None or duration.total_seconds() < 0 or (
+                field in {"roll_offset", "phoenix"} and duration.total_seconds() == 0
+            ):
+                raise ValueError(f"Invalid duration: {argument}")
+            # Taskwarrior treats bare m as months; the preview parser uses minutes.
+            seconds = f"{duration.total_seconds():.6f}".rstrip("0").rstrip(".")
+            value = f"PT{seconds}S"
+        if field == "progress" and value and (
+            not re.fullmatch(r"\d+(?:\.\d+)?", value) or not 0 <= float(value) <= 100
+        ):
+            raise ValueError("Progress must be between 0 and 100, or empty.")
+        if field == "phoenix_wait" and value not in {"", "yes", "no"}:
+            raise ValueError("Use phoenix_wait:yes, phoenix_wait:no, or phoenix_wait:.")
+        if field == "phoenix_count" and value and not re.fullmatch(r"[0-9]+", value):
+            raise ValueError("Phoenix count must be a nonnegative whole number, or empty.")
+        if field == "roll_manual" and value not in {"", "yes"}:
+            raise ValueError("Use roll_manual:yes or roll_manual: to restore automatic spacing.")
+        if field == "priority" and value not in {"", "H", "M", "L"}:
+            raise ValueError("Priority must be H, M, L, or empty.")
+        if field == "project" and value and not re.fullmatch(r"[\w.-]+", value):
+            raise ValueError("Invalid project name.")
+        fields[field] = value
+    if "roll_offset" in fields:
+        if "roll_manual" in fields and fields["roll_manual"] != "yes":
+            raise ValueError("An explicit offset requires roll_manual:yes.")
+        fields["roll_manual"] = "yes"
+    return [f"{field}:{value}" for field, value in fields.items()] + tags
+
+
+def chain_component(tasks: list[dict[str, Any]], selected: set[str]) -> dict[str, dict[str, Any]]:
+    """Snapshot connected tasks, excluding temporary IDs and computed urgency."""
+    connected = set(selected)
+    while True:
+        before = len(connected)
+        for task in tasks:
+            uuid, parent = str(task.get("uuid", "")), str(task.get("roll", ""))
+            if parent and (uuid in connected or parent in connected):
+                connected.update((uuid, parent))
+        if len(connected) == before:
+            break
+    return {str(task["uuid"]): {key: value for key, value in task.items() if key not in {"id", "urgency"}}
+            for task in tasks if str(task.get("uuid")) in connected}
+
+
+def edit_chain(number: int, arguments: list[str]) -> int:
+    # Installed commands carry the same scheduler as the on-exit hook.
+    try:
+        from hooks import roll as scheduler
+    except ModuleNotFoundError:
+        import roll_schedule as scheduler
+    modifications = chain_modifications(arguments)
+    command = task_command()
+    config = scheduler.task_run(command, "rc.color=off", "show").stdout
+    tasks = scheduler.export_tasks(command)
+    paths = sorted_chain_paths(tasks)
+    if number < 1 or number > len(paths):
+        raise ValueError(f"Chain {number} is not listed. Run task chain.")
+    path = paths[number - 1]
+    linked_only = any(value.startswith(("roll_offset:", "roll_manual:")) for value in modifications)
+    selected = [str(task["uuid"]) for task in path
+                if not linked_only or task.get("roll")]
+    if not selected:
+        raise ValueError("No linked tasks to modify.")
+    snapshot = chain_component(tasks, set(selected))
+    candidate = copy.deepcopy(tasks)
+    for task in candidate:
+        if str(task.get("uuid")) not in selected:
+            continue
+        for modification in modifications:
+            if modification[0] in "+-":
+                tags = set(task.get("tags", []))
+                if modification[0] == "+":
+                    tags.add(modification[1:])
+                else:
+                    tags.discard(modification[1:])
+                task["tags"] = sorted(tags)
+            else:
+                field, value = modification.split(":", 1)
+                if value:
+                    task[field] = value
+                else:
+                    task.pop(field, None)
+    calendar = load_calendar(command)
+    connected_candidate = [task for task in candidate if str(task.get("uuid")) in snapshot]
+    connected_candidate, released = scheduler.prepare_schedule(connected_candidate, set(selected))
+    scheduler.refresh_offsets(connected_candidate, command, calendar)
+    dates, slack, warnings = scheduler.calculate_schedule(connected_candidate, calendar)
+    if warnings:
+        raise ValueError("; ".join(dict.fromkeys(warnings)))
+    print(f"CHAIN {number} — preview; UUIDs retained through confirmation")
+    print("Changes: " + " ".join(modifications))
+    if released:
+        print("Roll will release completed predecessor links: " + ", ".join(sorted(released)))
+    if linked_only:
+        print("Only linked tasks are edited; an unlinked root is skipped.")
+    shared = set(selected) & {str(task["uuid"]) for other in paths
+                              if other is not path for task in other}
+    if shared:
+        print("WARNING: shared tasks also affect other branches: " + ", ".join(sorted(shared)))
+    for task in candidate:
+        uuid = str(task.get("uuid"))
+        if uuid not in snapshot:
+            continue
+        due = dates.get(uuid)
+        if uuid in selected or due is not None or uuid in slack:
+            detail = f"due {task.get('due', 'unset')} -> {scheduler.format_task_date(due)}" if due else f"due {task.get('due', 'unset')} (retained)"
+            if uuid in slack:
+                detail += f"; projected slack {slack[uuid]:g}h"
+            print(f"{'EDIT' if uuid in selected else 'RELATED'} {uuid} {task.get('description', '')}: {detail}")
+    if not sys.stdin.isatty():
+        print("Preview only: confirmation requires an interactive terminal.")
+        return 0
+    try:
+        confirmed = input("Apply these changes? [y/N] ").strip().lower() in {"y", "yes"}
+    except (EOFError, KeyboardInterrupt):
+        confirmed = False
+    if not confirmed:
+        print("Cancelled; no changes written.")
+        return 0
+    current = scheduler.export_tasks(command)
+    if (chain_component(current, set(selected)) != snapshot
+            or scheduler.task_run(command, "rc.color=off", "show").stdout != config):
+        raise ValueError("Selected path or scheduling inputs changed; run a fresh preview.")
+    # One bulk command lets the on-exit hook schedule after all selected edits.
+    result = subprocess.run(
+        [command, "rc.context=", "rc.confirmation=off", "rc.bulk=0", *selected, "modify", *modifications],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False,
+    )
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.returncode:
+        raise ValueError("Bulk edit failed; some changes may have been written. Inspect task chain. "
+                         + result.stderr.strip())
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="")
+    if "Roll warning:" in result.stdout:
+        raise ValueError("Edits were written but Roll reported a scheduling failure; inspect task chain.")
+    print(f"APPLIED: {len(selected)} tasks selected by UUID.")
+    return 0
+
+
 def browser(arguments: list[str]) -> int:
+    if len(arguments) >= 2 and arguments[0].isdigit() and arguments[1] == "modify":
+        try:
+            return edit_chain(int(arguments[0]), arguments[2:])
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f"Chain edit blocked: {exc}", file=sys.stderr)
+            return 1
     if arguments in (["help"], ["--help"]):
+        print("task chain NUMBER modify FIELD:VALUE ... previews and confirms edits.")
+        print("Fields: roll_offset, roll_manual, remaining, project, priority, progress, phoenix, phoenix_wait, phoenix_count; +tag / -tag.")
         print("task chain lists active Roll paths. task chain NUMBER shows tasks, capacity, and calendar breaks over one day.")
         return 0
     if len(arguments) > 1 or (arguments and not arguments[0].isdigit()):
