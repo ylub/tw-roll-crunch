@@ -36,6 +36,9 @@ uda.roll_offset.label=Roll Offset
 uda.roll_manual.type=string
 uda.roll_manual.label=Manual Roll Offset
 
+uda.roll_at.type=string
+uda.roll_at.label=Roll time
+
 uda.phoenix.type=duration
 uda.phoenix.label=Phoenix
 uda.phoenix_wait.type=string

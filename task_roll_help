@@ -21,10 +21,11 @@ from roll_calendar import (
     capacity_fraction,
     format_work_duration,
     load_calendar,
+    local_zone,
     long_breaks,
-    move_work,
+    move_roll,
+    roll_at_settings,
     work_between,
-    work_duration,
 )
 
 ROLL_HELP = """Taskwarrior Roll — live schedule
@@ -41,6 +42,7 @@ Start here
   roll:<UUID>             child's predecessor
   roll_offset:<duration>  child's gap after predecessor (available time with calendar)
   roll_manual:yes         keep this offset instead of capacity auto-spacing
+  roll_at:10:00           whole available-day steps, due at this local time
   phoenix:<duration>      recreate this task after completion
   phoenix_wait:yes        hide each new task until due
   phoenix_count:2         make two more copies, then stop
@@ -88,6 +90,13 @@ Keep a once-daily gap
   task CHILD modify roll_manual:yes roll_offset:P1D
   task CHILD modify roll_manual:
 
+Due at a fixed local time on each available day
+  task chain NUMBER modify roll_offset:P1D roll_at:10:00
+  roll_at needs HH:MM and positive whole-day offsets, such as P1D or P2D.
+  With a calendar, use 08:45–17:00; closed dates and unsuitable half-days are skipped.
+  Without a calendar, every date counts. Capacity spacing leaves roll_at tasks alone.
+  Fixed deadlines stay fixed. Clear this mode with task chain NUMBER modify roll_at:
+
 Repeat laundry for three loads
   task TASK_ID modify phoenix:PT90M phoenix_wait:yes phoenix_count:2
   Count means additional copies. Each copy is due 90 minutes after completion.
@@ -116,6 +125,12 @@ Set a finish-line on an existing linked final task
 How Rock reads
   Rock starts at a finish-line due date and works backward through Roll gaps.
   It prints one root-date command. Roll then moves ordinary children forward.
+  roll_at:10:00 with roll_offset:P1D means available-date steps at 10:00 local.
+  Rock honors roll_at when finding the latest predecessor dates; deadlines stay fixed.
+  Use HH:MM with positive whole-day offsets. With a calendar, use 08:45–17:00;
+  closed dates and half-days that cannot fit the time are skipped.
+  Set it with task chain NUMBER modify roll_offset:P1D roll_at:10:00
+  Clear it with task chain NUMBER modify roll_at:
 
 Fixed dates
   roll_fixed:checkpoint   fixed intermediate date; stops Rock here
@@ -153,6 +168,9 @@ Safety
   Saturday is off. Flexible work runs 08:45–17:00, or until 12:00 on half days.
   task chain NUMBER shows breaks longer than one day.
   Rock's fixed finish-line may fall on a day off. Multiple tasks may share a day.
+  Rebuilding a chain clears roll_at because the builder assigns its own gaps.
+  After building, use task chain NUMBER modify roll_offset:P1D roll_at:10:00
+  for available-date steps at a fixed local clock time. Clear with roll_at:
 """
 
 HELP = ROLL_HELP
@@ -458,6 +476,7 @@ def chain_candidate(
             if calendar is not None else dates[index].strftime("%Y%m%dT") + due_time
         )
         task.pop("roll_slack", None)
+        task.pop("roll_at", None)
         if index == 0:
             task.pop("roll", None)
             task.pop("roll_offset", None)
@@ -502,7 +521,7 @@ def modify_task(command: str, task: dict[str, Any], hooks: bool, score_enabled: 
     if not hooks:
         arguments.append("rc.hooks=0")
     arguments.extend((str(task["uuid"]), "modify"))
-    for field in ("remaining", "due", "wait", "roll", "roll_offset", "roll_fixed"):
+    for field in ("remaining", "due", "wait", "roll", "roll_offset", "roll_at", "roll_fixed"):
         value = task.get(field)
         arguments.append(f"{field}:{value}" if value else f"{field}:")
     if not hooks and score_enabled:
@@ -566,7 +585,8 @@ def r_mark_for(task: dict[str, Any]) -> str | None:
     if kind == "finish-line":
         return " finish-line"
     if task.get("roll"):
-        return f"󰍃 +{short_duration(task.get('roll_offset'))}"
+        clock = f" @{task['roll_at']}" if task.get("roll_at") else ""
+        return f"󰍃 +{short_duration(task.get('roll_offset'))}{clock}"
     return None
 
 
@@ -695,8 +715,12 @@ def rock_plan(
         if predecessor.get("status") not in {"pending", "waiting"}:
             warnings.append(f"{task_label(predecessor)} is completed or inactive.")
             break
-        required = move_work(required, -work_duration(current.get("roll_offset"), offset), calendar,
-                             forward_on_zero=False) if calendar is not None else required - offset
+        try:
+            required = move_roll(required, current.get("roll_offset"), offset, calendar,
+                                 current.get("roll_at", ""), backward=True)
+        except ValueError as exc:
+            warnings.append(f"{task_label(current)}: {exc}")
+            break
         kind = milestone_kind(predecessor)
         if kind in {"checkpoint", "vacation", "off", "night"}:
             checkpoint_due = parse_date(predecessor.get("due"))
@@ -892,6 +916,13 @@ def validate_tasks(tasks: list[dict[str, Any]]) -> list[str]:
             continue
         if task.get("roll_offset") and not task.get("roll"):
             warnings.append(f"{task_label(task)}: roll_offset needs roll:<UUID>.")
+        if task.get("roll_at"):
+            if not task.get("roll"):
+                warnings.append(f"{task_label(task)}: roll_at needs roll:<UUID>.")
+            try:
+                roll_at_settings(task.get("roll_offset"), task["roll_at"], None)
+            except ValueError as exc:
+                warnings.append(f"{task_label(task)}: {exc}")
         fixed = task.get("roll_fixed")
         if fixed and milestone_kind(task) is None:
             warnings.append(f"{task_label(task)}: invalid roll_fixed value.")
@@ -1066,15 +1097,17 @@ def render_fixed_timing(
     for task in path[1:]:
         offset = parse_duration(task.get("roll_offset"))
         if projected is not None and offset is not None:
-            projected = (move_work(projected, work_duration(task.get("roll_offset"), offset), calendar)
-                         if calendar is not None else projected + offset)
+            try:
+                projected = move_roll(projected, task.get("roll_offset"), offset, calendar, task.get("roll_at", ""))
+            except ValueError:
+                projected = None
         else:
             projected = None
         if kind := milestone_kind(task):
             fixed = parse_date(task.get("due"))
             lines.extend(("", f"{kind.upper()}: {task_label(task)}"))
             for label, value in (("Projected arrival", projected), ("Fixed deadline", fixed)):
-                local = value.astimezone() if value is not None else None
+                local = value.astimezone(local_zone()) if value is not None else None
                 lines.append(f"  {label}: {local.strftime('%Y-%m-%d %H:%M %Z') if local else 'unavailable'}")
             if projected is not None and fixed is not None:
                 gap = fixed - projected
@@ -1107,10 +1140,11 @@ def render_chain_details(
     capacities = capacities or {}
     path = paths[number - 1]
     root, leaf = path[0], path[-1]
+    local_dates = calendar is not None or any(task.get("roll_at") for task in path)
     lines = [
         f"CHAIN {number} — {task_label(root)} to {task_label(leaf)}",
         "",
-        paint(f'{"ID":>4}  {"TASK":<28}  {"STATUS":<8}  {("DUE (LOCAL)" if calendar is not None else "DUE"):<16}  {"REMAINING":<10}  {("WORK GAP" if calendar is not None else "GAP")!s:<8}  R', theme.get("header", "")),
+        paint(f'{"ID":>4}  {"TASK":<28}  {"STATUS":<8}  {("DUE (LOCAL)" if local_dates else "DUE"):<16}  {"REMAINING":<10}  {("WORK GAP" if calendar is not None else "GAP")!s:<8}  R', theme.get("header", "")),
     ]
     for index, task in enumerate(path):
         task_id = str(task.get("id") or task.get("uuid", "")[:8])
@@ -1125,7 +1159,7 @@ def render_chain_details(
                 lines.extend(f"      Calendar break: {item}" for item in long_breaks(before, due, calendar))
         lines.append(
             f"{task_id}  {label:<28}  {str(task.get('status') or '—'):<8}  "
-            f"{(due.astimezone() if calendar is not None else due).strftime('%Y-%m-%d %H:%M') if due else '—':<16}  {short_duration(task.get('remaining')):<10}  "
+            f"{(due.astimezone(local_zone()) if local_dates else due).strftime('%Y-%m-%d %H:%M') if due else '—':<16}  {short_duration(task.get('remaining')):<10}  "
             f"{short_duration(task.get('roll_offset')):<8}  {marker}"
         )
     lines.extend(render_fixed_timing(path, calendar))
@@ -1187,6 +1221,7 @@ def chain_modifications(arguments: list[str]) -> list[str]:
         if not separator or field not in {
             "roll_offset", "roll_manual", "remaining", "project", "priority",
             "progress", "phoenix", "phoenix_wait", "phoenix_count",
+            "roll_at",
         } or field in fields:
             raise ValueError(f"Unsupported or duplicate modification: {argument}")
         if field in {"roll_offset", "remaining", "phoenix"} and (value or field == "roll_offset"):
@@ -1196,8 +1231,15 @@ def chain_modifications(arguments: list[str]) -> list[str]:
             ):
                 raise ValueError(f"Invalid duration: {argument}")
             # Taskwarrior treats bare m as months; the preview parser uses minutes.
-            seconds = f"{duration.total_seconds():.6f}".rstrip("0").rstrip(".")
-            value = f"PT{seconds}S"
+            if field == "roll_offset" and re.fullmatch(r"P?[0-9]+(?:\.[0-9]+)?[DW]", value.upper()):
+                value = value.upper() if value.upper().startswith("P") else "P" + value.upper()
+            elif field == "roll_offset" and value.upper().startswith("P"):
+                value = value.upper()
+            else:
+                seconds = f"{duration.total_seconds():.6f}".rstrip("0").rstrip(".")
+                value = f"PT{seconds}S"
+        if field == "roll_at" and value:
+            roll_at_settings("P1D", value, None)
         if field == "progress" and value and (
             not re.fullmatch(r"\d+(?:\.\d+)?", value) or not 0 <= float(value) <= 100
         ):
@@ -1249,7 +1291,7 @@ def edit_chain(number: int, arguments: list[str]) -> int:
     if number < 1 or number > len(paths):
         raise ValueError(f"Chain {number} is not listed. Run task chain.")
     path = paths[number - 1]
-    linked_only = any(value.startswith(("roll_offset:", "roll_manual:")) for value in modifications)
+    linked_only = any(value.startswith(("roll_offset:", "roll_manual:", "roll_at:")) for value in modifications)
     selected = [str(task["uuid"]) for task in path
                 if not linked_only or task.get("roll")]
     if not selected:
@@ -1341,7 +1383,8 @@ def browser(arguments: list[str]) -> int:
             return 1
     if arguments in (["help"], ["--help"]):
         print("task chain NUMBER modify FIELD:VALUE ... previews and confirms edits.")
-        print("Fields: roll_offset, roll_manual, remaining, project, priority, progress, phoenix, phoenix_wait, phoenix_count; +tag / -tag.")
+        print("Fields: roll_offset, roll_manual, roll_at, remaining, project, priority, progress, phoenix, phoenix_wait, phoenix_count; +tag / -tag.")
+        print("roll_offset:P1D roll_at:10:00 uses the next available date at 10:00 local; roll_at: clears this mode.")
         print("task chain lists active Roll paths. task chain NUMBER shows tasks, capacity, and calendar breaks over one day.")
         return 0
     if len(arguments) > 1 or (arguments and not arguments[0].isdigit()):

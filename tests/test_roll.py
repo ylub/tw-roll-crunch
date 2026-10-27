@@ -36,6 +36,16 @@ class RollTests(unittest.TestCase):
         self.assertIn("phoenix_count:2", output.getvalue())
         self.assertIn("two more copies", output.getvalue())
 
+    def test_roll_at_help_is_available_on_all_extension_entry_points(self):
+        command = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
+        for arguments in (["help"], ["rock", "help"], ["browse", "--help"],
+                          ["chain", "--help"], ["rock", "chain", "--help"]):
+            with self.subTest(arguments=arguments), patch("sys.stdout", new_callable=io.StringIO) as output:
+                self.assertEqual(command["main"](arguments), 0)
+                for text in ("roll_at:10:00", "roll_offset:P1D", "roll_at:"):
+                    self.assertIn(text, output.getvalue())
+
+
     def test_chain_fixed_milestones_and_slack(self):
         tasks = [
             {"uuid": "A", "status": "pending", "due": "20260101T000000Z"},
@@ -808,8 +818,8 @@ class RollTests(unittest.TestCase):
             "22222222-2222-2222-2222-222222222222",
         ]
         tasks = [
-            {"id": 1, "uuid": uuids[0], "status": "pending", "description": "First", "remaining": "PT20M"},
-            {"id": 2, "uuid": uuids[1], "status": "pending", "description": "Last", "remaining": "PT1H", "due": "20260923T160000Z"},
+            {"id": 1, "uuid": uuids[0], "status": "pending", "description": "First", "remaining": "PT20M", "roll_at": "10:00"},
+            {"id": 2, "uuid": uuids[1], "status": "pending", "description": "Last", "remaining": "PT1H", "due": "20260923T160000Z", "roll_at": "10:00"},
         ]
         with tempfile.NamedTemporaryFile("w", encoding="utf-8") as source:
             source.write("\n".join(f"{uuid}:task" for uuid in uuids))
@@ -821,6 +831,7 @@ class RollTests(unittest.TestCase):
         self.assertNotIn("remaining", options)
         self.assertEqual(candidate[0]["remaining"], "PT20M")
         self.assertEqual(candidate[1]["remaining"], "PT1H")
+        self.assertTrue(all("roll_at" not in task for task in candidate))
 
     def test_chain_lists_every_missing_remaining_estimate(self):
         roll_help = runpy.run_path(str(Path(__file__).parent.parent / "task_roll_help"))
@@ -921,6 +932,27 @@ class ChainEditTests(unittest.TestCase):
         self.assertIn("roll_offset:PT5400S", write.call_args.args[0])
         self.assertIn("remaining:PT1800S", write.call_args.args[0])
         self.assertIn("roll_offset:PT5400S", output)
+
+    def test_bulk_roll_at_preserves_day_units_and_skips_unlinked_root(self):
+        for offset in ("P1D", "1d"):
+            code, _, error, write = self.run_edit([f"roll_offset:{offset}", "roll_at:10:00"])
+            self.assertEqual(code, 0, error)
+            self.assertEqual(write.call_args.args[0][4:7], ["B", "C", "modify"])
+            self.assertIn("roll_offset:P1D", write.call_args.args[0])
+            self.assertIn("roll_at:10:00", write.call_args.args[0])
+        self.tasks[1]["roll_at"] = "10:00"
+        code, _, error, write = self.run_edit(["roll_at:"])
+        self.assertEqual(code, 0, error)
+        self.assertIn("roll_at:", write.call_args.args[0])
+
+
+    def test_bulk_roll_at_rejects_invalid_clock_and_hour_offsets(self):
+        for modifications in (["roll_at:25:00"], ["roll_at:9:00"],
+                              ["roll_offset:24h", "roll_at:10:00"]):
+            code, _, _, write = self.run_edit(modifications)
+            self.assertEqual(code, 1)
+            write.assert_not_called()
+
 
     def test_invalid_bulk_progress_and_phoenix_fields_never_write(self):
         for modification in (

@@ -301,7 +301,7 @@ task chain 2 modify roll_offset:1d
 task chain 2 modify phoenix:90m phoenix_wait:yes phoenix_count:2
 ```
 
-Supported fields: `roll_offset`, `roll_manual`, `remaining`, `progress`,
+Supported fields: `roll_offset`, `roll_manual`, `roll_at`, `remaining`, `progress`,
 `project`, `priority`, `phoenix`, `phoenix_wait`, and `phoenix_count`, plus
 `+tag` and `-tag`. Progress accepts 0–100; Phoenix count accepts nonnegative
 whole numbers. Empty values clear fields except `roll_offset`, which requires
@@ -314,6 +314,9 @@ Spacing edits skip an unlinked root; other edits apply to the full path.
 An explicit offset sets `roll_manual:yes`; use `roll_manual:` to resume
 automatic spacing. Preview warns about tasks shared with other paths and
 preserves fixed dates. Only confirm after checking the selected tasks.
+For one task per available date at a set local time, use
+`task chain 2 modify roll_offset:P1D roll_at:10:00`. Clear `roll_at:` to return
+to counting working hours. See [Roll time settings](roll.md#roll_at) for rules.
 Noninteractive commands preview without writing. Chain numbers can change;
 the confirmed operation retains UUIDs and rejects changed scheduling inputs.
 Dates, dependencies, lifecycle fields, tracking fields, and computed scores

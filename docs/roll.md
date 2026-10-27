@@ -94,6 +94,33 @@ hides each copy from normal task lists until its due time. Without it, each
 copy is visible right away. Omit `phoenix_count` for one copy. Set
 `phoenix_count:0` to stop future copies.
 
+### `roll_at`
+
+Use `roll_at:10:00` with `roll_offset:P1D` to schedule the next task at 10:00
+on the next available local date. Finishing Tuesday at 08:21 schedules Wednesday
+at 10:00, rather than Tuesday at 17:00. `P2D` counts two available dates.
+
+```sh
+task chain 2 modify roll_offset:P1D roll_at:10:00
+```
+
+The preview skips the unlinked root and retains fixed deadlines. Confirm only
+after reviewing it. Use `task chain 2 modify roll_at:` to remove this mode.
+It also works through `track -i` without changing the shell.
+
+The offset must be a positive whole number of days (`P1D`, `P2D`, or `1d`).
+`roll_at` requires a 24-hour `HH:MM` time. With a calendar, times must be
+08:45–17:00; closed dates and half-days that cannot accommodate the requested
+time are skipped. Without a calendar, every date counts and any clock time is
+allowed. Local dates preserve the requested time across daylight saving changes.
+
+Automatic capacity spacing leaves `roll_at` tasks alone. Clearing `roll_at`
+restores ordinary duration-based scheduling; any `roll_manual:yes` remains
+until cleared separately. Roll still releases a completed predecessor link,
+retaining the newly scheduled due date and clearing the child's Roll settings.
+Rock and fixed-date projections use the same rule; fixed due dates remain fixed.
+Existing tasks without `roll_at` keep their prior scheduling behavior.
+
 ### `roll_fixed`
 
 Marks a due date as fixed instead of freely rolling it.

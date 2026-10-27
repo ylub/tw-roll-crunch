@@ -13,7 +13,13 @@ import sys
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from roll_calendar import format_work_duration, limited_dates, load_calendar, move_work, work_duration
+from roll_calendar import (
+    format_work_duration,
+    limited_dates,
+    load_calendar,
+    move_roll,
+    work_duration,
+)
 from roll_crunch import crunch_enabled, crunch_modifications
 
 UTC = dt.timezone.utc
@@ -170,6 +176,7 @@ def refresh_offsets(
         if (
             task.get("status") not in ROLLABLE_STATUSES
             or not task.get("roll")
+            or task.get("roll_at")
             or str(task.get("roll_manual") or "").strip().lower() == "yes"
         ):
             continue
@@ -271,7 +278,12 @@ def calculate_schedule(
             memo[memo_key] = None
             return None
 
-        projected_due = move_work(predecessor_due, work_duration(task.get("roll_offset"), offset), calendar) if calendar is not None else predecessor_due + offset
+        try:
+            projected_due = move_roll(predecessor_due, task.get("roll_offset"), offset, calendar, task.get("roll_at", ""))
+        except ValueError as exc:
+            warnings.append(f"Roll {uuid[:8]}: {exc}")
+            memo[memo_key] = None
+            return None
         kind = milestone_kind(task)
         if kind and respect_milestones:
             fixed_due = parse_task_date(task.get("due"))
@@ -319,7 +331,8 @@ def r_mark_for(task: dict[str, Any], slack: float | None) -> str | None:
 
     if task.get("roll"):
         offset = task.get("roll_offset")
-        return f"󰍃 +{short_duration(offset)}" if offset else "󰍃 ?"
+        clock = f" @{task['roll_at']}" if task.get("roll_at") else ""
+        return f"󰍃 +{short_duration(offset)}{clock}" if offset else "󰍃 ?"
     return None
 
 
@@ -385,6 +398,7 @@ def prepare_schedule(tasks: list[dict[str, Any]], changed_uuids: set[str]) -> tu
             retained_links.add(uuid)
             task.pop("roll", None)
             task.pop("roll_offset", None)
+            task.pop("roll_at", None)
     return schedule_tasks, retained_links
 
 
@@ -488,6 +502,8 @@ def main() -> int:
                 modifications.extend(("roll:", "roll_offset:"))
                 if "roll_manual" in task:
                     modifications.append("roll_manual:")
+                if "roll_at" in task:
+                    modifications.append("roll_at:")
                 link_released = True
             if uuid in slack_hours:
                 try:

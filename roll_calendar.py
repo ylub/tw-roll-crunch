@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import subprocess
+from zoneinfo import ZoneInfo
 
 UTC = dt.timezone.utc
 DAY = dt.timedelta(days=1)
@@ -77,6 +78,66 @@ def work_duration(raw: object, duration: dt.timedelta) -> dt.timedelta:
         iso = re.match(r"P(?:(?P<weeks>[0-9.]+)W)?(?:(?P<days>[0-9.]+)D)?", value)
         days = float(iso["weeks"] or 0) * 7 + float(iso["days"] or 0) if iso else 0
     return duration + (WORKDAY - DAY) * days
+
+
+def roll_at_settings(raw: object, at: str, calendar: dict | None) -> tuple[int, dt.time]:
+    match = re.fullmatch(r"P?([0-9]+)D", str(raw).upper())
+    if not match or int(match[1]) < 1:
+        raise ValueError("roll_at requires a positive whole-day roll_offset, such as P1D.")
+    if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", at):
+        raise ValueError("roll_at must be HH:MM, from 00:00 to 23:59.")
+    clock = dt.time.fromisoformat(at)
+    if calendar is not None and not dt.time(8, 45) <= clock <= dt.time(17):
+        raise ValueError("With a calendar, roll_at must be between 08:45 and 17:00.")
+    return int(match[1]), clock
+
+
+def local_zone() -> ZoneInfo:
+    # Taskwarrior sets TZ=UTC for hooks; fixed clock times use the system zone.
+    with open("/etc/localtime", "rb") as source:
+        return ZoneInfo.from_file(source)
+
+
+def move_roll(
+    base: dt.datetime, raw: object, duration: dt.timedelta,
+    calendar: dict[dt.date, float] | None, at: str = "", backward: bool = False,
+) -> dt.datetime:
+    """Apply a Roll gap, or count available dates at a fixed local clock time."""
+    if not at:
+        amount = work_duration(raw, duration) if calendar is not None else duration
+        amount = -amount if backward else amount
+        return (move_work(base, amount, calendar, forward_on_zero=not backward)
+                if calendar is not None else base + amount)
+    days, clock = roll_at_settings(raw, at, calendar)
+    zone = local_zone()
+    day = base.astimezone(zone).date()
+
+    def available(day: dt.date) -> bool:
+        if calendar is None:
+            return True
+        start, end = work_window(day, calendar)
+        return start < end and start.time() <= clock <= end.time()
+
+    if backward:
+        # Find the latest target date that can meet the downstream deadline.
+        while not available(day) or dt.datetime.combine(day, clock, tzinfo=zone).astimezone(UTC) > base:
+            day -= DAY
+        days -= 1
+    direction = -DAY if backward else DAY
+    while days:
+        day += direction
+        if available(day):
+            days -= 1
+    if backward:
+        day -= DAY
+        if calendar is not None:
+            while not availability(calendar, day):
+                day -= DAY
+            latest = work_window(day, calendar)[1].replace(tzinfo=zone)
+        else:
+            latest = dt.datetime.combine(day, dt.time(23, 59, 59), tzinfo=zone)
+        return latest.astimezone(UTC)
+    return dt.datetime.combine(day, clock, tzinfo=zone).astimezone(UTC)
 
 
 def format_work_duration(duration: dt.timedelta) -> str:

@@ -8,6 +8,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from hooks import roll
 from roll_calendar import limited_dates, load_calendar, long_breaks, move_work, work_between, work_duration
@@ -21,6 +22,9 @@ class CalendarTests(unittest.TestCase):
         self.previous_tz = os.environ.get("TZ")
         os.environ["TZ"] = "America/Chicago"
         time.tzset()
+        zone = patch("roll_calendar.local_zone", return_value=ZoneInfo("America/Chicago"))
+        zone.start()
+        self.addCleanup(zone.stop)
 
     def tearDown(self):
         if self.previous_tz is None:
@@ -70,6 +74,79 @@ class CalendarTests(unittest.TestCase):
         sunday = move_work(friday, work_duration("P1D", dt.timedelta(days=1)), {})
         self.assertEqual(sunday, dt.datetime(2026, 3, 8, 21, tzinfo=UTC))  # Sunday 16:00 CDT
         self.assertEqual(move_work(sunday, -work_duration("P1D", dt.timedelta(days=1)), {}), friday)
+
+    def test_roll_at_moves_to_next_available_date_at_local_time(self):
+        tasks = [
+            {"uuid": "A", "status": "completed", "end": "20261027T132113Z"},
+            {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D", "roll_at": "10:00"},
+            {"uuid": "C", "status": "pending", "roll": "B", "roll_offset": "P1D", "roll_at": "10:00"},
+        ]
+        due, _, warnings = roll.calculate_schedule(tasks, {})
+        self.assertEqual(warnings, [])
+        self.assertEqual(due["B"], dt.datetime(2026, 10, 28, 15, tzinfo=UTC))
+        self.assertEqual(due["C"], dt.datetime(2026, 10, 29, 15, tzinfo=UTC))
+        tasks[1].pop("roll_at")
+        due, _, warnings = roll.calculate_schedule(tasks, {})
+        self.assertEqual(due["B"], dt.datetime(2026, 10, 27, 22, tzinfo=UTC))
+
+    def test_roll_at_skips_closed_dates_half_days_and_handles_dst(self):
+        tasks = [
+            {"uuid": "A", "status": "pending", "due": "20261029T150000Z"},
+            {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D", "roll_at": "14:00"},
+        ]
+        due, _, warnings = roll.calculate_schedule(tasks, {dt.date(2026, 10, 30): 0.5})
+        self.assertEqual(warnings, [])
+        self.assertEqual(due["B"], dt.datetime(2026, 11, 1, 20, tzinfo=UTC))
+        tasks[1]["roll_offset"] = "P2D"
+        due, _, _ = roll.calculate_schedule(tasks, {dt.date(2026, 10, 30): 0.5})
+        self.assertEqual(due["B"], dt.datetime(2026, 11, 2, 20, tzinfo=UTC))
+
+    def test_roll_at_rejects_invalid_settings_without_changing_dates(self):
+        for at, offset in (("25:00", "P1D"), ("9:00", "P1D"), ("07:00", "P1D"),
+                           ("10:00", "PT24H"), ("10:00", "P0D"), ("10:00", "P1.5D")):
+            tasks = [{"uuid": "A", "status": "pending", "due": "20261027T150000Z"},
+                     {"uuid": "B", "status": "pending", "roll": "A", "roll_at": at, "roll_offset": offset}]
+            with self.subTest(at=at, offset=offset):
+                due, _, warnings = roll.calculate_schedule(tasks, {})
+                self.assertNotIn("B", due)
+                self.assertTrue(warnings)
+
+    def test_roll_at_keeps_fixed_deadline_and_rock_projects_consistently(self):
+        tasks = [{"uuid": "A", "status": "pending", "due": "20261027T150000Z"},
+                 {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D", "roll_at": "10:00"},
+                 {"uuid": "F", "status": "pending", "roll": "B", "roll_offset": "P1D", "roll_at": "10:00",
+                  "roll_fixed": "finish-line", "due": "20261029T140000Z"}]
+        due, slack, warnings = roll.calculate_schedule(tasks, {})
+        self.assertEqual(warnings, [])
+        self.assertNotIn("F", due)
+        self.assertEqual(slack["F"], -1)
+        helper = runpy.run_path(str(ROOT / "task_roll_help"))
+        plan = helper["rock_plan"](tasks, "F", {})
+        self.assertEqual(plan["warnings"], [])
+        candidate = [dict(task) for task in tasks]
+        candidate[0]["due"] = roll.format_task_date(plan["start"])
+        _, projected_slack, warnings = roll.calculate_schedule(candidate, {})
+        self.assertEqual(warnings, [])
+        self.assertGreaterEqual(projected_slack["F"], 0)
+
+    def test_roll_at_without_calendar_and_auto_spacing(self):
+        tasks = [{"uuid": "A", "status": "pending", "due": "20261030T150000Z"},
+                 {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D", "roll_at": "10:00",
+                  "remaining": "PT1H", "project": "demo"}]
+        due, _, warnings = roll.calculate_schedule(tasks)
+        self.assertEqual(warnings, [])
+        self.assertEqual(due["B"], dt.datetime(2026, 10, 31, 15, tzinfo=UTC))
+        with patch.object(roll, "project_capacity", return_value=7):
+            self.assertEqual(roll.refresh_offsets(tasks, "task", {}), {})
+
+    def test_roll_at_ignores_taskwarrior_hook_utc_environment(self):
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        tasks = [{"uuid": "A", "status": "completed", "end": "20261027T132113Z"},
+                 {"uuid": "B", "status": "pending", "roll": "A", "roll_offset": "P1D", "roll_at": "10:00"}]
+        due, _, warnings = roll.calculate_schedule(tasks, {})
+        self.assertEqual(warnings, [])
+        self.assertEqual(due["B"], dt.datetime(2026, 10, 28, 15, tzinfo=UTC))
 
     def test_half_day_stops_at_local_noon(self):
         calendar = {dt.date(2026, 9, 25): 0.5,

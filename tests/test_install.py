@@ -11,6 +11,9 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from zoneinfo import ZoneInfo
+
+from roll_calendar import local_zone
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -128,6 +131,57 @@ class InstalledTests(unittest.TestCase):
             self.assertEqual(task["phoenix_count"], 2)
         rejected = self.run_command(TASK, "chain", "1", "modify", "--apply", check=False)
         self.assertIn("Unsupported or duplicate modification: --apply", rejected.stderr)
+
+
+    def test_installed_roll_at_bulk_preview_completion_and_clear(self):
+        self.env["TZ"] = "America/Chicago"
+        self.config += "\nroll.calendar.2026-10-27=1\n"
+        self.write_config()
+        self.install()
+        local = local_zone()
+        utc = ZoneInfo("UTC")
+        start = dt.datetime(2026, 10, 27, 10, tzinfo=local).astimezone(utc)
+        root = self.add("Root", "due:" + start.strftime("%Y%m%dT%H%M%SZ"))
+        child = self.add("Child", f"roll:{root['uuid']}", "roll_offset:P1D")
+        arguments = (TASK, "chain", "1", "modify", "roll_offset:P1D", "roll_at:10:00")
+        before = self.tasks()
+        preview = self.run_command(*arguments)
+        self.assertIn("Preview only", preview.stdout)
+        after = self.tasks()
+        for task in before + after:
+            task.pop("urgency", None)  # Computed urgency changes as time passes.
+        self.assertEqual(before, after)
+        output = self.confirmed_command(*arguments)
+        self.assertIn("APPLIED: 1 tasks", output)
+        edited = next(t for t in self.tasks() if t["uuid"] == child["uuid"])
+        self.assertEqual(edited["roll_offset"], "P1D")
+        self.assertEqual(edited["roll_at"], "10:00")
+        expected = dt.datetime(2026, 10, 28, 10, tzinfo=local).astimezone(utc)
+        self.assertEqual(edited["due"], expected.strftime("%Y%m%dT%H%M%SZ"))
+        detail = self.run_command(TASK, "chain", "1").stdout
+        self.assertIn("2026-10-28 10:00", detail)
+        self.assertIn("@10:00", detail)
+        self.run_command(TASK, root["uuid"], "done")
+        completed = next(t for t in self.tasks() if t["uuid"] == root["uuid"])
+        edited = next(t for t in self.tasks() if t["uuid"] == child["uuid"])
+        end = dt.datetime.strptime(completed["end"], "%Y%m%dT%H%M%SZ").replace(tzinfo=utc)
+        day = end.astimezone(local).date() + dt.timedelta(days=1)
+        if day.weekday() == 5:
+            day += dt.timedelta(days=1)
+        expected = dt.datetime.combine(day, dt.time(10), tzinfo=local).astimezone(utc)
+        self.assertEqual(edited["due"], expected.strftime("%Y%m%dT%H%M%SZ"))
+        for field in ("roll", "roll_offset", "roll_at", "roll_manual"):
+            self.assertNotIn(field, edited)
+
+
+    def test_installed_roll_at_help_aliases(self):
+        self.install()
+        for arguments in (("roll", "help"), ("rock", "help"), ("chain", "--help"),
+                          ("roll", "chain", "--help"), ("rock", "chain", "--help")):
+            with self.subTest(arguments=arguments):
+                output = self.run_command(TASK, *arguments).stdout
+                for text in ("roll_at:10:00", "roll_offset:P1D", "roll_at:"):
+                    self.assertIn(text, output)
 
 
     def test_track_shell_confirms_installed_chain_edit(self):
